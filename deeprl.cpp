@@ -13,7 +13,7 @@ using caffe::Blob;
 using boost::str;
 using boost::format;
 
-DEFINE_int32(gpu, -1, "GPU mode on given device ID");
+DEFINE_int32(gpu, 0, "GPU mode on given device ID");
 DEFINE_int32(display_interval, 100, "display_interval");
 DEFINE_int32(iterations,1000000, "iterations");
 DEFINE_string(solver, "",  "The solver definition protocol buffer text file.");
@@ -23,6 +23,8 @@ DEFINE_string(solver, "",  "The solver definition protocol buffer text file.");
 
 int main(int argc, char** argv) 
 {
+	std::mt19937 random_engine;
+
 	caffe::GlobalInit(&argc,&argv);
 	// google::InitGoogleLogging(argv[0]);
  //  	google::InstallFailureSignalHandler();
@@ -39,27 +41,68 @@ int main(int argc, char** argv)
 	
 	Caffe::set_phase(Caffe::TRAIN);
 
-	boost::shared_ptr<DeepNetwork> network(new DeepNetwork);
+	boost::shared_ptr<DeepNetwork> hero_net(new DeepNetwork);	
+	boost::shared_ptr<DeepNetwork> minion_net(new DeepNetwork);
+	
+	typedef boost::shared_ptr<HeroBrain> HeroBrainSp;
+	enum { num_teams = 2 };
+	enum { minions_per_team = 3 };
+	enum { num_heroes = 2 };
+	enum { num_minions = num_teams * minions_per_team };
+
+	auto gen_brains = [&](int num_brains, boost::shared_ptr<DeepNetwork> net) {
+		std::vector<HeroBrainSp> hero_brains(num_brains);
+		std::generate(hero_brains.begin(),hero_brains.end(),[&] { 
+			auto brain = HeroBrainSp(new HeroBrain);
+			brain->network = net;
+			return brain;
+		});
+		return hero_brains;
+	};
+
+	auto hero_brains = gen_brains(num_heroes,hero_net);
+	auto minion_brains = gen_brains(num_minions,minion_net);	
 
 	int epoch = 0;
 	for (int iter = 0; iter<FLAGS_iterations;epoch++)
 	{
-		World w;	
+		World w(random_engine);	
 		Display disp(w,epoch,iter);		
 
+		auto pos_gen = [&](std::function<Vector()> gen)
+		{
+			for (int trial=0;trial<1000;trial++)
+			{				
+				auto pos = gen();
+				if (w.is_vacant(pos)) return pos;
+			}
+
+			LOG(FATAL) << "Couldn't find a valid spawn-point";
+			exit(-1);
+		};
+
+		auto x_dist = std::uniform_int_distribution<>(0,w.size.x);
+
+		int minion_id = 0;
+
 		auto spawn_hero = [&](int team){
+			Vector pos = pos_gen([&]{return Vector(x_dist(random_engine),team * (w.size.y - 1));});		
+			auto brain = hero_brains[team];
 			return w.spawn([=]{
 				auto m = new Hero(team);
-				m->pos.x = w.size.x / 2;
-				m->pos.y = team * (w.size.y - 1);
+				m->brain = brain.get();
+				m->pos = pos;
 				return m;
 			});			
 		};	
 		auto spawn_minion = [&](int team){
+			Vector pos = pos_gen([&]{return Vector(x_dist(random_engine),team * (w.size.y - 1));});		
+			auto brain = minion_brains[minion_id++];
+			assert(brain.get()!=nullptr);
 			return w.spawn([=]{
 				auto m = new Minion(team);
-				m->pos.x = w.size.x / 2;
-				m->pos.y = team * (w.size.y - 1);
+				m->brain = brain.get();
+				m->pos = pos;
 				return m;
 			});			
 		};	

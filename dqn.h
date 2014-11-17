@@ -4,17 +4,16 @@ enum { temporal_window = 3 };
 enum { world_size = 16 };
 
 // var per
-enum { max_actions = 5 };
 enum { num_states = world_size * world_size };
-enum { num_actions = max_actions };
+enum { num_actions = 5 };
 enum { net_inputs = (num_states + num_actions) * temporal_window + num_states };
 
 enum { MinibatchSize = batch_size };
-enum { InputDataSize = num_states };
+enum { InputDataSize = num_states * (temporal_window + 1) };
 enum { MinibatchDataSize = InputDataSize * MinibatchSize };
 enum { OutputCount = num_actions };
 
-typedef std::vector<float> net_input_type;
+typedef std::array<float,num_actions> net_input_type;
 typedef std::array<float,num_states> input_type;
 typedef std::array<input_type,temporal_window+1> State;
 
@@ -35,6 +34,9 @@ struct Policy
 {
 	int action;
 	float val;
+
+	Policy() {}
+	Policy(int action,float val) : action(action), val(val) {}
 };
 
 class AnnealedEpsilon
@@ -46,13 +48,13 @@ public:
 	int learning_steps_total, learning_steps_burnin;
 
 	AnnealedEpsilon()
-	: is_learning(true), age(0)
+	: is_learning(true), age(0), epsilon_min(0.1), learning_steps_burnin(3000), learning_steps_total(100000), epsilon_test_time(0.1)
 	{}
 
 	float get() const
 	{
 		if (is_learning)
-		{
+		{			
 			return std::min(1.0f,std::max(epsilon_min, 1.0f-(age - learning_steps_burnin)/(learning_steps_total - learning_steps_burnin)));
 		}
 		else
@@ -62,7 +64,7 @@ public:
 	}
 
 	void operator ++()
-	{
+	{		
 		age++;
 	}
 };
@@ -89,7 +91,7 @@ public :
 	mutable std::mt19937 random_engine;
 
 	AnnealedEpsilon epsilon;
-	std::vector<Experience> experiences;
+	std::vector<Experience> experiences; // reserved, no fragmentation
 	int experience_size;
 	int start_learn_threshold;
 	float gamma;
@@ -100,7 +102,7 @@ public :
 	}
 	
 	DeepNetwork()
-	: experience_size(30000)
+	: experience_size(30000), gamma(0.95), trainer(*this), eval_for_prediction(*this), eval_for_train(*this)
 	{
 		start_learn_threshold = std::max(experience_size / 10, 1000);
 		experiences.reserve(experience_size);
@@ -118,28 +120,129 @@ public :
 		net = solver->net();
 		q_values_blob = net->blob_by_name("q_values");
 		std::fill(dummy_input_data.begin(),dummy_input_data.end(),0.0);
+
+		auto get_layer = [&](const char* name){
+			auto result = boost::dynamic_pointer_cast<caffe::MemoryDataLayer<float>>(net->layer_by_name(name));
+			assert(result);
+			return result;
+		};
+
+		auto check_blob_size = [&](const char* blob_name,int n,int c,int h,int w) {
+			auto blob = net->blob_by_name(blob_name);
+			assert(blob);
+			assert(blob->num() == n);
+			assert(blob->channels() == c);
+			assert(blob->height() == h);
+			assert(blob->width() == w);
+		};
+
+		frames_input_layer = get_layer("frames_input_layer");		
+		target_input_layer = get_layer("target_input_layer");
+		filter_input_layer = get_layer("filter_input_layer");
+
+		check_blob_size("frames",MinibatchSize,temporal_window+1,world_size,world_size);
+		check_blob_size("target",MinibatchSize,num_actions,1,1);
+		check_blob_size("filter",MinibatchSize,num_actions,1,1);
 	}
 
-	std::vector<Policy> net_batch_policy(const std::vector<State>& states)
+	template <int N>
+	class Evaluator
 	{
-		std::array<float,MinibatchDataSize> frames;
-		// fill
-		net_input(frames,dummy_input_data,dummy_input_data);
-		net->ForwardPrefilled(nullptr);
+	public:
+		DeepNetwork& net;
+		Evaluator(DeepNetwork& net) : net(net) {}
 
-		return std::vector<Policy>{{0,1}};
-	}
+		std::array<Policy,N> policies;
+		std::array<Policy,N>& evaluate(const std::array<State,N>& states)
+		{
+			assert(states.size() <= MinibatchSize);
+			
+			FramesLayerInputData frames_input;
+			auto target = frames_input.begin();
+			for (const auto& state : states)
+			{
+				for (const auto& input : state)
+				{
+					std::copy(input.begin(),input.end(),target);
+					target += input.size();
+				}
+			}  
+	  
+			net.net_input(frames_input,net.dummy_input_data,net.dummy_input_data);
+			net.net->ForwardPrefilled(nullptr);			
+
+			int index = 0;
+			for (const auto& state : states)
+			{
+				std::array<float,num_actions> q_values;
+				int action = 0;
+				std::generate(q_values.begin(),q_values.end(),[&]{
+					return net.q_values_blob->data_at(index, action, 0, 0);
+				});
+
+				auto max_elem = std::max_element(q_values.begin(),q_values.end());
+				const auto max_idx = std::distance(q_values.begin(),max_elem);
+				policies[index].action = action;
+				policies[index].val = *max_elem;
+
+				index++;
+			}
+
+			return policies;
+		}
+	};
+
+
+	// std::vector<Policy> net_batch_policy(const std::vector<State>& states)
+	// {
+	// 	assert(states.size() <= MinibatchSize);
+		
+	// 	FramesLayerInputData frames_input;
+	// 	auto target = frames_input.begin();
+	// 	for (const auto& state : states)
+	// 	{
+	// 		for (const auto& input : state)
+	// 		{
+	// 			std::copy(input.begin(),input.end(),target);
+	// 			target += input.size();
+	// 		}
+	// 	}  
+  
+	// 	net_input(frames_input,dummy_input_data,dummy_input_data);
+	// 	net->ForwardPrefilled(nullptr);
+
+	// 	std::vector<Policy> policies;
+	// 	policies.reserve(states.size());
+
+	// 	int index = 0;
+	// 	for (const auto& state : states)
+	// 	{
+	// 		std::array<float,num_actions> q_values;
+	// 		int action = 0;
+	// 		std::generate(q_values.begin(),q_values.end(),[&]{
+	// 			return q_values_blob->data_at(index, action, 0, 0);
+	// 		});
+
+	// 		auto max_elem = std::max_element(q_values.begin(),q_values.end());
+	// 		const auto max_idx = std::distance(q_values.begin(),max_elem);
+	// 		policies.emplace_back(action,*max_elem);
+
+	// 		index++;
+	// 	}			
+
+	// 	return policies;
+	// }
 
 	Policy policy(State s)
 	{
 		std::array<float,MinibatchDataSize> frames_input;
 		
-		return net_batch_policy(std::vector<State>{{s}}).front();
+		return eval_for_prediction.evaluate(std::array<State,1>{{s}}).front();
 	}
 
 	bool test_epsilon()
 	{
-		float dice = std::uniform_real_distribution<float>(0,1)(random_engine);
+		float dice = std::uniform_real_distribution<float>(0,1)(random_engine);		
 		return dice < epsilon.get();
 	}
 
@@ -176,47 +279,68 @@ public :
 		return *out;
 	}
 
-	void train()
+	class Trainer
 	{
-		if (experiences.size() > start_learn_threshold)
-		{
-			FramesLayerInputData frames_input;
-  			TargetLayerInputData target_input;
-  			FilterLayerInputData filter_input;
+	public :
+		DeepNetwork& net;
+		Trainer(DeepNetwork& net) : net(net) {}
 
-			std::vector<const Experience*> samples;
-			std::vector<State> states;
+		FramesLayerInputData frames_input;
+  		TargetLayerInputData target_input;
+  		FilterLayerInputData filter_input;
+
+  		std::array<const Experience*,batch_size> samples;
+		std::array<State,batch_size> states;		
+
+		void train()
+		{
 			for (int k=0; k<batch_size; ++k)
 			{
-				int re = randint(experience_size);
-				samples.push_back(&experiences[re]);
-				states.push_back(experiences[re].state);
+				int re = net.randint(net.experience_size);
+				samples[k] = &net.experiences[re];
+				states[k] = net.experiences[re].state;
 			}
 
-			const auto policies = net_batch_policy(states);
-			int index = 0;
+			const auto& policies = net.eval_for_train.evaluate(states);
 
-			auto target = frames_input.begin();
+			auto frame = frames_input.begin();
+			auto target = target_input.begin();
+			auto filter = filter_input.begin();
   	
+  			int index=0;
 			for (auto p: policies)
 			{
-				const Experience& e = *samples[index];
-				float r = e.reward + gamma * p.val;
+				const auto e = samples[index];
+				float r = e->reward + net.gamma * p.val;
 
-				for (const auto& frame : e.state)
+				for (const auto& f : e->state)
 				{	
-					std::copy(frame.begin(),frame.end(),target);
-					target += frame.size();
+					std::copy(f.begin(),f.end(),frame);
+					frame += f.size();
 				}
-				target_input[index] = r;
-				filter_input[index] = 1.0f;
-
+				*target++ = r;
+				*filter++ = 1.0f;
 				index++;
 			}
 
-			net_input(frames_input,target_input,filter_input);
+			net.net_input(frames_input,target_input,filter_input);
 
-			solver->Step(1);
+			net.solver->Step(1);
+		}
+	};
+
+	Evaluator<1> eval_for_prediction;
+	Evaluator<MinibatchSize> eval_for_train;
+
+	Trainer trainer;
+
+	void train()
+	{
+		// LOG(INFO) << "training";
+
+		if (experiences.size() > start_learn_threshold)
+		{
+			trainer.train();
 		}
 	}
 
@@ -234,17 +358,18 @@ public:
 	typedef boost::shared_ptr<DeepNetwork> NetworkSp;
 
 	int forward_passes;
-	float latest_reward;
 	
 	NetworkSp network;
 
-	Brain(NetworkSp network)
-	: forward_passes(0), latest_reward(0), network(network)
+	Brain()
+	: forward_passes(0)
 	{}
 
 	int forward(const input_type& input_array,std::function<int()> random_action)
 	{
 		forward_passes++;
+
+		// LOG(INFO) << "forwarding pass:" << forward_passes;
 		
 		Frame frame;
 
@@ -252,23 +377,30 @@ public:
 
 		if (forward_passes > temporal_window)
 		{
+			// LOG(INFO) << "getting network input";
 			frame.state = get_net_input(input_array);
+
+			// LOG(INFO) << "predicting action";
 			frame.action = network->predict(frame.state,random_action);
+
+			// LOG(INFO) << "predict completed";			
+			frame_window.pop_front();
 		}
 		else
 		{
+			// LOG(INFO) << "random action";
 			frame.action = random_action();
 		}
-
-		frame_window.pop_front();
+		
 		frame_window.push_back(frame);
+
+		// LOG(INFO) << "returning from forward";
 
 		return frame.action;
 	}
 
 	void backward(float reward)
 	{
-		latest_reward = reward;
 		auto itr = frame_window.rbegin();
 		Frame& cur = *itr++;
 		cur.reward = reward;
@@ -292,7 +424,7 @@ public:
 	static net_input_type action1ofk(int N, int k)
 	{
 		net_input_type v;
-		v.resize(N);
+		std::fill(v.begin(),v.end(),0.0);
 		v[k] = 1.0f;
 		return v;
 	}

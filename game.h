@@ -39,7 +39,7 @@ bool operator != (const Vector& a, const Vector& b)
 
 bool operator == (const Vector& a, const Vector& b)
 {
-	return a.x == b.x || a.y == b.y;
+	return a.x == b.x && a.y == b.y;
 }
 
 static Vector dir_vec[] = {{1,0},{0,1},{-1,0},{0,-1}};
@@ -48,7 +48,7 @@ class World;
 class Actable;
 class AgentBrain : public Brain
 {
-public:
+public:	
 	virtual int forward(Actable* agent ) = 0;
 };
 
@@ -74,7 +74,7 @@ public:
 
 class World {
 public:
-	mutable std::mt19937 random_engine;
+	std::mt19937& random_engine;
 	int randint(int N) const
 	{
 		return std::uniform_int_distribution<>(0,N-1)(random_engine);
@@ -86,8 +86,8 @@ public:
 	std::deque<std::string> events;
 	bool quit;
 	
-	World() 
-	: size(world_size,world_size), clock(0), quit(false)
+	World(std::mt19937& random_engine) 
+	: random_engine(random_engine), size(world_size,world_size), clock(0), quit(false)
 	{		
 	}
 
@@ -148,9 +148,21 @@ public:
 		}				
 	}
 
+	bool is_vacant(const Vector& x) const
+	{
+		for (auto a : agents)
+		{
+			if (a->pos == x)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	bool can_move_to(const Agent* a,const Vector& start, const Vector& end)
 	{
-		return end.x >= 0 && end.y >= 0 && end.x < size.x && end.y < size.y;
+		return end.x >= 0 && end.y >= 0 && end.x < size.x && end.y < size.y && is_vacant(end);
 	}
 };
 
@@ -163,6 +175,8 @@ public:
 	AgentBrain* brain;
 
 	Actable() : num_actions(1), reward(0), brain(nullptr) {}
+
+	virtual std::string detail() { return str(format("%s reward(%f)")%Base::detail()%reward); }
 
 	int num_actions;
 	int action;	
@@ -281,7 +295,7 @@ public:
 
 		if (world->can_move_to(this,pos,new_pos))
 		{
-			// LOG(INFO) << "moved!" << new_pos.x << "," << new_pos.y;
+			//LOG(INFO) << "moved!" << this << " : " << new_pos.x << "," << new_pos.y << " <- " << pos.x << ", " << pos.y;
 			pos = new_pos;
 		}
 	}
@@ -306,7 +320,9 @@ public:
 		{
 			dump();
 		}
-	}
+
+		std::cout << ANSI_ESCAPE::gotoxy(0,world.size.y+4);
+	}	
 
 	void dump()
 	{
@@ -361,8 +377,7 @@ public:
 		while (y<20)
 		{
 			logline("");
-		}		
-		
+		}				
 		std::cout << ANSI_ESCAPE::gotoxy(0,world.size.y+1) << ANSI << "47;0m";
 	}
 };
@@ -409,13 +424,19 @@ public :
 	virtual void die(Pawn* attacker)
 	{	
 		pending_kill = true;
+
+		reward -= 10.0f;
 	}
 
 	virtual void take_damage(int damage, Pawn* attacker)
 	{		
 		health -= damage;
+		attacker->reward += 1.0f;
+		reward -= 1.0f;
 		if (health < 0)
 		{			
+			attacker->reward += 10.0f;
+
 			health = 0;	
 			die(attacker);
 		}
@@ -474,16 +495,17 @@ public :
 
 	virtual Pawn* find_target()
 	{
-		int best_dist = world->size.x * world->size.y * 4;
+		int best_dist = square(2);
 		Pawn* best = nullptr;
 		for (auto a:world->agents)
 		{
 			auto b = dynamic_cast<Pawn*>(a.get());
-			if (b && b->team != team)
+			if (a.get() != b && b && b->team != team)
 			{
 				auto dist = distance(a->pos,b->pos);
 				if (dist < best_dist)
 				{
+					// LOG(INFO) << "found_target" << dist << a->pos.x << "," << a->pos.y << ":" << b->pos.x << b->pos.y;
 					best_dist = dist;
 					best = b;
 				}
@@ -524,6 +546,8 @@ public:
 			}
 			write(a->pos.x,a->pos.y,value);
 		}
+
+		// LOG(INFO) << "hero brain forward, calling super";
 		return Brain::forward(input_array,[&]{return agent->random_action();});
 	}
 };
