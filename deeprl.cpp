@@ -28,7 +28,7 @@ int main(int argc, char** argv)
 	caffe::GlobalInit(&argc,&argv);
 	// google::InitGoogleLogging(argv[0]);
  //  	google::InstallFailureSignalHandler();
-  	google::LogToStderr();
+ 	google::LogToStderr();
 
 	if (FLAGS_gpu)
 	{
@@ -106,12 +106,12 @@ int main(int argc, char** argv)
 				return m;
 			});			
 		};	
-		spawn_minion(0);
-		spawn_minion(0);
-		spawn_minion(0);
-		spawn_minion(1);
-		spawn_minion(1);
-		spawn_minion(1);	
+		// spawn_minion(0);
+		// spawn_minion(0);
+		// spawn_minion(0);
+		// spawn_minion(1);
+		// spawn_minion(1);
+		// spawn_minion(1);	
 		spawn_hero(0);
 		spawn_hero(1);
 

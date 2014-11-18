@@ -10,14 +10,15 @@ RUN apt-get update && apt-get install -y \
   libboost-all-dev \ 
   libhdf5-serial-dev \ 
   protobuf-compiler \ 
-  gcc-4.6 \ 
-  g++-4.6 \ 
-  gcc-4.6-multilib \  
-  g++-4.6-multilib \ 
+  gcc-4.8 \ 
+  g++-4.8 \ 
+  gcc-4.8-multilib \  
+  g++-4.8-multilib \ 
   gfortran \ 
   libjpeg62 \ 
   libfreeimage-dev \  
   libatlas-base-dev \  
+  libopenblas-dev \
   git \ 
   bc \ 
   wget \ 
@@ -27,14 +28,14 @@ RUN apt-get update && apt-get install -y \
   liblmdb-dev \  
   pkgconf
 
-# Use gcc 4.6
-RUN update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-4.6 30 && \
-  update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-4.6 30 && \ 
-  update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-4.6 30 && \
-  update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-4.6 30
+# Use gcc 4.8
+RUN update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-4.8 30 && \
+  update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-4.8 30 && \ 
+  update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-4.8 30 && \
+  update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-4.8 30
 
 # Clone the Caffe repo 
-RUN cd /opt && git clone https://github.com/nakosung/caffe && git checkout dqn
+RUN cd /opt && git clone https://github.com/nakosung/caffe.git && (cd caffe; git checkout dqn)
 
 # Glog 
 RUN cd /opt && wget https://google-glog.googlecode.com/files/glog-0.3.3.tar.gz && \
@@ -68,10 +69,8 @@ RUN cd /opt && \
 # Build Caffe core
 RUN cd /opt/caffe && cp Makefile.config.example Makefile.config
 RUN cd /opt/caffe && echo "CPU_ONLY := 1" >> Makefile.config 
-RUN cd /opt/caffe && echo "CXX := /usr/bin/g++-4.6" >> Makefile.config 
+RUN cd /opt/caffe && echo "CXX := /usr/bin/g++-4.8" >> Makefile.config 
 RUN cd /opt/caffe && sed -i 's/atlas/open/' Makefile.config
 RUN cd /opt/caffe && sed -i 's/CXX :=/CXX ?=/' Makefile
 RUN cd /opt/caffe && make all
 
-# Make + run tests
-RUN cd /opt/caffe && make test && make runtest

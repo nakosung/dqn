@@ -319,9 +319,8 @@ public:
 		if (world.clock % FLAGS_display_interval == 0)
 		{
 			dump();
-		}
-
-		std::cout << ANSI_ESCAPE::gotoxy(0,world.size.y+4);
+			std::cout << ANSI_ESCAPE::gotoxy(0,world.size.y+4);
+		}		
 	}	
 
 	void dump()
@@ -429,7 +428,7 @@ public :
 	}
 
 	virtual void take_damage(int damage, Pawn* attacker)
-	{		
+	{	
 		health -= damage;
 		attacker->reward += 1.0f;
 		reward -= 1.0f;
@@ -453,7 +452,7 @@ public :
 	virtual bool is_valid_action(int action)
 	{
 		if (action == 0)
-		{			
+		{	
 			return cooldown == 0 && find_target() != nullptr;
 		}
 		else
@@ -465,7 +464,7 @@ public :
 	virtual void do_action(int action)
 	{
 		if (action == 0)
-		{
+		{			
 			cooldown = max_cooldown;
 			auto target = find_target();			
 			if (target) 
@@ -491,6 +490,8 @@ public :
 	virtual void die(Pawn* attacker)
 	{
 		world->quit = true;
+
+		brain->flush(SingleFrameSp());
 	}
 
 	virtual Pawn* find_target()
@@ -500,7 +501,7 @@ public :
 		for (auto a:world->agents)
 		{
 			auto b = dynamic_cast<Pawn*>(a.get());
-			if (a.get() != b && b && b->team != team)
+			if (b && b != this && b->team != team)
 			{
 				auto dist = distance(a->pos,b->pos);
 				if (dist < best_dist)
@@ -510,7 +511,7 @@ public :
 					best = b;
 				}
 			}
-		}
+		}			
 		return best;
 	}	
 };
@@ -520,14 +521,21 @@ class HeroBrain : public AgentBrain
 public:
 	virtual int forward( Actable* agent )
 	{
-		input_type input_array;
-		std::fill(input_array.begin(),input_array.end(),0.5f);
+		// LOG(INFO) << "hero brain forward, calling super";
+		return Brain::forward(get_frame(agent),[&]{return agent->random_action();});
+	}
+
+	SingleFrameSp get_frame(Actable* agent) const
+	{		
+		SingleFrameSp single_frame(new SingleFrame);
+
+		std::fill(single_frame->begin(),single_frame->end(),0.5f);
 
 		Pawn* self = dynamic_cast<Pawn*>(agent);
 
 		auto write = [&](int x, int y, float val)
 		{
-			input_array[x + y * world_size] = val;
+			(*single_frame)[x + y * world_size] = val;
 		};
 		for (auto other : agent->world->agents)
 		{
@@ -546,8 +554,6 @@ public:
 			}
 			write(a->pos.x,a->pos.y,value);
 		}
-
-		// LOG(INFO) << "hero brain forward, calling super";
-		return Brain::forward(input_array,[&]{return agent->random_action();});
+		return single_frame;
 	}
 };
