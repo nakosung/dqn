@@ -27,7 +27,7 @@ int main(int argc, char** argv)
 
 	caffe::GlobalInit(&argc,&argv);
 	// google::InitGoogleLogging(argv[0]);
- //  	google::InstallFailureSignalHandler();
+  	// google::InstallFailureSignalHandler();
  	google::LogToStderr();
 
 	if (FLAGS_gpu)
@@ -44,24 +44,24 @@ int main(int argc, char** argv)
 	boost::shared_ptr<DeepNetwork> hero_net(new DeepNetwork);	
 	boost::shared_ptr<DeepNetwork> minion_net(new DeepNetwork);
 	
-	typedef boost::shared_ptr<HeroBrain> HeroBrainSp;
+	typedef boost::shared_ptr<AgentBrain> BrainSp;
 	enum { num_teams = 2 };
 	enum { minions_per_team = 3 };
 	enum { num_heroes = 2 };
 	enum { num_minions = num_teams * minions_per_team };
 
-	auto gen_brains = [&](int num_brains, boost::shared_ptr<DeepNetwork> net) {
-		std::vector<HeroBrainSp> hero_brains(num_brains);
+	auto gen_brains = [&](int num_brains, boost::shared_ptr<DeepNetwork> net, std::function<AgentBrain*()> gen) {
+		std::vector<BrainSp> hero_brains(num_brains);
 		std::generate(hero_brains.begin(),hero_brains.end(),[&] { 
-			auto brain = HeroBrainSp(new HeroBrain);
+			auto brain = BrainSp(gen());
 			brain->network = net;
 			return brain;
 		});
 		return hero_brains;
 	};
 
-	auto hero_brains = gen_brains(num_heroes,hero_net);
-	auto minion_brains = gen_brains(num_minions,minion_net);	
+	auto hero_brains = gen_brains(num_heroes,hero_net,[=]{return new HeroBrain;});
+	auto minion_brains = gen_brains(num_minions,minion_net,[=]{return new HeroBrain;});	
 
 	int epoch = 0;
 	for (int iter = 0; iter<FLAGS_iterations;epoch++)
@@ -88,6 +88,7 @@ int main(int argc, char** argv)
 		auto spawn_hero = [&](int team){
 			Vector pos = pos_gen([&]{return Vector(x_dist(random_engine),team * (w.size.y - 1));});		
 			auto brain = hero_brains[team];
+			brain->world = &w;
 			return w.spawn([=]{
 				auto m = new Hero(team);
 				m->brain = brain.get();
@@ -98,6 +99,7 @@ int main(int argc, char** argv)
 		auto spawn_minion = [&](int team){
 			Vector pos = pos_gen([&]{return Vector(x_dist(random_engine),team * (w.size.y - 1));});		
 			auto brain = minion_brains[minion_id++];
+			brain->world = &w;
 			assert(brain.get()!=nullptr);
 			return w.spawn([=]{
 				auto m = new Minion(team);

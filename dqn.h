@@ -5,7 +5,7 @@ enum { world_size = 16 };
 
 // var per
 enum { num_states = world_size * world_size };
-enum { num_actions = 5 };
+enum { num_actions = 6 };
 
 enum { MinibatchSize = batch_size };
 enum { InputDataSize = num_states * (temporal_window + 1) };
@@ -30,7 +30,8 @@ struct Experience
 
 	void check_sanity()
 	{
-		assert( reward < 100 && reward > -100 );
+		assert(reward < 100 && reward > -100 );
+		assert(action >= 0 && action < num_actions);
 	}
 };
 
@@ -60,7 +61,7 @@ public:
 	{
 		if (is_learning)
 		{			
-			return std::min(1.0f,std::max(epsilon_min, 1.0f-(age - learning_steps_burnin)/(learning_steps_total - learning_steps_burnin)));
+			return std::min(1.0f,std::max(epsilon_min, 1.0f-(float)(age - learning_steps_burnin)/(learning_steps_total - learning_steps_burnin)));
 		}
 		else
 		{
@@ -157,6 +158,9 @@ public :
 
 		void input( const FramesLayerInputData& frames, const TargetLayerInputData& target, const FilterLayerInputData& filter )
 		{
+			assert(std::all_of(frames.begin(),frames.end(),[=](float x){return !std::isnan(x);}));
+			assert(std::all_of(target.begin(),target.end(),[=](float x){return !std::isnan(x);}));
+			assert(std::all_of(filter.begin(),filter.end(),[=](float x){return !std::isnan(x);}));
 			frames_input_layer->Reset(const_cast<float*>(frames.data()),dummy_input_data.data(),MinibatchSize);
 			target_input_layer->Reset(const_cast<float*>(target.data()),dummy_input_data.data(),MinibatchSize);
 			filter_input_layer->Reset(const_cast<float*>(filter.data()),dummy_input_data.data(),MinibatchSize);
@@ -218,14 +222,22 @@ public :
 					if (input_frame)
 					{
 						std::copy(input_frame->begin(),input_frame->end(),target);						
+						assert(input_frame->size() == num_states);
 					}	
 					else
 					{
-						std::fill(target, target + InputDataSize, 0);
+						std::fill(target, target + num_states, 0);
 					}					
 					target += num_states;
 				}
+				assert(input_frames.size() == temporal_window+1);
 			}  
+			for (int index=N; index<MinibatchSize; ++index)
+			{
+				std::fill(target, target + InputDataSize, 0);
+				target += InputDataSize;
+			}
+			assert(target == frames_input.end());
 	  
 			net.feeder.input(frames_input);
 			net.net->ForwardPrefilled(nullptr);
@@ -240,6 +252,11 @@ public :
 			auto q_at = [&](int action){return net.q_values_blob->data_at(index,action,0,0);};
 
 			Policy best(0,q_at(0));
+
+			if (net.needs_explanation)
+			{
+				net.explanation = str(format("%.2f")%best.val);
+			}
 			
 			for (int action=1; action<num_actions; ++action)
 			{
@@ -247,6 +264,10 @@ public :
 				if (q > best.val)
 				{
 					best = Policy(action,q);
+				}
+				if (net.needs_explanation)
+				{
+					net.explanation += str(format(",%.2f")%q);
 				}
 			}			
 			return best;
@@ -282,7 +303,7 @@ public :
 						input_frames_batch[k][j] = e.input_frames[j+1];						
 					}				
 					input_frames_batch[k][temporal_window] = e.next_frame;
-				}								
+				}	
 			}
 
 			const auto& policies = net.eval_for_train.evaluate(input_frames_batch);
@@ -290,29 +311,83 @@ public :
 			auto frame = frames_input.begin();
 			auto target = target_input.begin();
 			auto filter = filter_input.begin();
+
+			std::fill(frames_input.begin(),frames_input.end(),0);
+			std::fill(target_input.begin(),target_input.end(),0);
+			std::fill(filter_input.begin(),filter_input.end(),0);
   	
-  			int index=0;
-			for (auto p: policies)
+			for (int index=0; index<MinibatchSize; ++index)
 			{
 				const auto e = samples[index];
+				const auto p = policies[index];
+
 				float r = e->next_frame ? e->reward + net.gamma * p.val : e->reward;			
+
+				assert(!std::isnan(e->reward));
+				assert(!e->next_frame || !std::isnan(p.val));
+				assert(!std::isnan(r));
 				
 				for (const auto& f : e->input_frames)
 				{	
 					std::copy(f->begin(),f->end(),frame);
 					frame += f->size();
 				}
-				*target++ = r;
-				*filter++ = 1.0f;
-				index++;
+				target[e->action] = r;
+				filter[e->action] = 1.0f;
+
+				target += num_actions;
+				filter += num_actions;
 			}
+
+			assert(target == target_input.end());
+			assert(frame == frames_input.end());
+			assert(filter == filter_input.end());
 
 			net.feeder.input(frames_input,target_input,filter_input);
 
+			// net.check_sanity();
+
+			// LOG(INFO) << &net;
+
+			net.check_sanity();
+
 			net.solver->Step(1);
+
+			net.check_sanity();
+
+		// 	auto net_ = net.net;
+
+		// 	LOG(INFO) << "conv1:" <<
+  //     net_->layer_by_name("conv1_layer")->blobs().front()->data_at(1, 0, 0, 0);
+  // LOG(INFO) << "conv2:" <<
+  //     net_->layer_by_name("conv2_layer")->blobs().front()->data_at(1, 0, 0, 0);
+  // LOG(INFO) << "ip1:" <<
+  //     net_->layer_by_name("ip1_layer")->blobs().front()->data_at(1, 0, 0, 0);
+  // LOG(INFO) << "ip2:" <<
+  //     net_->layer_by_name("ip2_layer")->blobs().front()->data_at(1, 0, 0, 0);
 		}
 	};
 
+	void check_sanity()
+	{
+		// LOG(INFO) << "checking!";
+		auto check_layer = [&](const char* name) {
+			// std::cout << name << v;
+			auto layer = net->layer_by_name(name);
+			assert(layer);
+			auto& blobs = layer->blobs();
+			assert(blobs.size());
+			auto blob = blobs.front();
+			assert(blob);
+			auto v = blob->data_at(1, 0, 0, 0);
+			assert(!std::isnan(v));
+		};
+
+		check_layer("conv1_layer");
+		check_layer("conv2_layer");
+		check_layer("ip1_layer");
+		check_layer("ip2_layer");
+	}
 
 	typedef shared_ptr<caffe::Blob<float>> BlobSp;
 	typedef shared_ptr<caffe::Net<float>> NetSp;
@@ -320,6 +395,8 @@ public :
 
 	Feeder feeder;
 	ReplayMemory replay_memory;
+	bool needs_explanation;
+	std::string explanation;
 
 	Evaluator<1> eval_for_prediction;
 	Evaluator<MinibatchSize> eval_for_train;
@@ -339,7 +416,7 @@ public :
 	}
 	
 	DeepNetwork()
-	: gamma(0.95), trainer(*this), eval_for_prediction(*this), eval_for_train(*this), replay_memory(*this), feeder(*this)
+	: gamma(0.95), trainer(*this), eval_for_prediction(*this), eval_for_train(*this), replay_memory(*this), feeder(*this), needs_explanation(false)
 	{		
 		net_init();
 	}
@@ -368,7 +445,7 @@ public :
 	}	
 
 	int predict(const InputFrames& input_frames,std::function<int()> random_action)
-	{
+	{		
 		if (epsilon.should_do_random_action())
 		{
 			return random_action();
@@ -421,17 +498,25 @@ public:
 		}
 	}
 
+	std::string q_values_str;
+	std::string detail() const { return q_values_str; }
+
+	virtual bool needs_explanation() const { return false; }
+
 	int forward(SingleFrameSp frame,std::function<int()> random_action)
 	{
 		forward_passes++;
 		
 		flush(frame);
 
-		if (forward_passes > temporal_window + 1)
+		if (forward_passes > temporal_window + 1 && network->epsilon.is_learning)
 		{
 			has_pending_experience = true;
-			std::copy(frame_window.begin(), frame_window.end(), current_experience.input_frames.begin());			
+			std::copy(frame_window.begin(), frame_window.end(), current_experience.input_frames.begin());
+			network->needs_explanation = needs_explanation();
 			current_experience.action = network->predict(current_experience.input_frames,random_action);
+			network->needs_explanation = false;
+			q_values_str = network->explanation;
 
 			frame_window.pop_front();
 		}
@@ -448,8 +533,6 @@ public:
 
 	void backward(float reward)
 	{
-		if (!network->epsilon.is_learning) return;
-
 		current_experience.reward = reward;		
 	}	
 	

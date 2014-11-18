@@ -24,7 +24,7 @@ T square(T t)
 
 int distance( const Vector& a, const Vector& b )
 {
-	return square(a.x - a.y) + square(b.x - b.y);
+	return square(a.x - b.x) + square(a.y - b.y);
 }
 
 Vector operator + (const Vector& a, const Vector& b)
@@ -42,33 +42,25 @@ bool operator == (const Vector& a, const Vector& b)
 	return a.x == b.x && a.y == b.y;
 }
 
-static Vector dir_vec[] = {{1,0},{0,1},{-1,0},{0,-1}};
-
 class World;
 class Actable;
-class AgentBrain : public Brain
-{
-public:	
-	virtual int forward(Actable* agent ) = 0;
-};
 
 class Agent {
 public:
 	std::function<Agent*()> creator;
 	World* world;
 	Vector pos;
-	int dir;
 	bool pending_kill;
 	Vector saved;	
 
 	Agent()
-	: world(world), pos(0,0), dir(0), saved(0,0), pending_kill(false)
+	: world(world), pos(0,0), saved(0,0), pending_kill(false)
 	{}
 
 	virtual void forward() {}
 	virtual void tick() {}
 	virtual void backward() {}
-	virtual std::string detail() { return str(format("agent %3d,%3d %d")%pos.x%pos.y%dir); }
+	virtual std::string detail() { return str(format("pos(%3d,%3d) ")%pos.x%pos.y); }
 	virtual std::string one_letter() { return "*"; }
 };
 
@@ -78,6 +70,10 @@ public:
 	int randint(int N) const
 	{
 		return std::uniform_int_distribution<>(0,N-1)(random_engine);
+	}
+	bool should_display() const
+	{
+		return clock % FLAGS_display_interval == 0;
 	}
 
 	Vector size;
@@ -125,6 +121,10 @@ public:
 					}
 					agents.remove(a);
 					clear_to_go = false;
+					if (agents.size() == 0)
+					{
+						quit = true;
+					}
 					break;
 				}
 			}
@@ -166,6 +166,14 @@ public:
 	}
 };
 
+class AgentBrain : public Brain
+{
+public:	
+	World* world;
+	virtual int forward(Actable* agent ) = 0;
+	virtual bool needs_explanation() const { return world->should_display(); }
+};
+
 class Actable : public Agent
 {
 public:
@@ -176,7 +184,7 @@ public:
 
 	Actable() : num_actions(1), reward(0), brain(nullptr) {}
 
-	virtual std::string detail() { return str(format("%s reward(%f)")%Base::detail()%reward); }
+	virtual std::string detail() { return str(format("%s reward(%f) brain(%s)")%Base::detail()%reward%(brain ? brain->detail() : "none")); }
 
 	int num_actions;
 	int action;	
@@ -228,6 +236,8 @@ public:
 	virtual void do_action(int action) {}
 };
 
+static Vector dir_vec[] = {{1,0},{0,1},{-1,0},{0,-1}};
+
 class Movable : public Actable
 {
 public:
@@ -235,9 +245,10 @@ public:
 	int move_action_offset;
 
 	enum {
-		move_front,
-		turn_left,
-		turn_right,
+		move_left,
+		move_right,
+		move_up,
+		move_down,
 		move_max
 	};
 
@@ -251,13 +262,8 @@ public:
 	{
 		if (action < move_action_offset)
 			return super::is_valid_action(action);
-		switch (action - move_action_offset)
-		{
-		case move_front :
-			return can_move_front();
-		default:
-			return true;
-		}
+		
+		return can_move(dir_vec[action - move_action_offset]);
 	}
 
 	virtual void do_action(int action)
@@ -265,33 +271,19 @@ public:
 		if (action < move_action_offset)
 			return super::do_action(action);
 
-		switch (action - move_action_offset)
-		{
-		case move_front :
-			do_move_front();
-			break;
-		case turn_right :
-			dir = (dir + 1 + 4) % 4;
-			break;
-		case turn_left :
-			dir = (dir - 1 + 4) % 4;
-			break;
-		default:
-			// never reaches here!
-			break;
-		}
+		do_move(dir_vec[action - move_action_offset]);
 	}
 
-	bool can_move_front() const
+	bool can_move(const Vector& dir) const
 	{
-		auto new_pos = pos + dir_vec[dir];
+		auto new_pos = pos + dir;
 
 		return world->can_move_to(this,pos,new_pos);		
 	}
 
-	void do_move_front()
+	void do_move(const Vector& dir)
 	{
-		auto new_pos = pos + dir_vec[dir];
+		auto new_pos = pos + dir;
 
 		if (world->can_move_to(this,pos,new_pos))
 		{
@@ -316,7 +308,7 @@ public:
 
 	void tick()
 	{
-		if (world.clock % FLAGS_display_interval == 0)
+		if (world.should_display())
 		{
 			dump();
 			std::cout << ANSI_ESCAPE::gotoxy(0,world.size.y+4);
@@ -327,7 +319,7 @@ public:
 	{
 		if (needs_clear)
 		{
-			needs_clear = false;
+			//needs_clear = false;
 			std::cout << ANSI << "1J";
 		}		
 
@@ -347,7 +339,7 @@ public:
 			{
 				for (auto a : world.agents)
 				{
-					if (a->pos.x == x && a->pos.y == y)
+					if (a->pos.x == x && a->pos.y == y && !a->pending_kill)
 					{			
 						found = true;			
 						std::cout << a->one_letter();
@@ -393,49 +385,69 @@ public :
 	int team;
 	int health;	
 	int cooldown;
+	int death_timer;
 	char code;
+	int range;
+
+	float attack_reward, kill_reward;
 
 	std::string colorize(std::string in) const { return str(format("%s%dm%s%s0m")%ANSI%(team+44)%in%ANSI); }
 
 	virtual std::string one_letter() { return colorize(str(format("%c")%code)); }
 	virtual std::string detail() { return colorize(str(format("%c[team:%d] %s hp:%d")%code%team%Base::detail()%health)); }
 
-	Pawn(int team,int in_max_cooldown,int in_max_health, char code)
-	: max_health(in_max_health), max_cooldown(in_max_cooldown), team(team), health(in_max_health), cooldown(0), code(code)
+	Pawn(int team,int in_max_cooldown,int in_max_health, char code, int range, float attack_reward, float kill_reward)
+	: max_health(in_max_health), max_cooldown(in_max_cooldown), team(team), health(in_max_health), cooldown(0), code(code), death_timer(0), range(range), attack_reward(attack_reward), kill_reward(kill_reward)
 	{
 		num_actions += 1;
 	}
 
 	virtual Pawn* find_target()
 	{
-		auto target = pos + dir_vec[dir];
+		int best_dist = square(range+1);
+		Pawn* best = nullptr;
 		for (auto a:world->agents)
 		{
 			auto b = dynamic_cast<Pawn*>(a.get());
-			if (b && b->pos == target && b->team != team)
+			if (b && b != this && b->team != team)
 			{
-				return b;
+				auto dist = distance(pos,b->pos);
+				if (dist < best_dist)
+				{
+					// std::cout << "found_target" << dist << pos.x << "," << pos.y << ":" << b->pos.x << b->pos.y;
+					best_dist = dist;
+					best = b;
+				}
 			}
-		}
-		return nullptr;
-	}	
+		}			
+		return best;
+	}		
 
 	virtual void die(Pawn* attacker)
 	{	
+		if (attacker)
+		{
+			attacker->death_timer = 0;
+			attacker->reward += kill_reward;
+		}		
+
 		pending_kill = true;
 
-		reward -= 10.0f;
+		// reward -= 10.0f;
 	}
 
 	virtual void take_damage(int damage, Pawn* attacker)
 	{	
 		health -= damage;
-		attacker->reward += 1.0f;
-		reward -= 1.0f;
-		if (health < 0)
-		{			
-			attacker->reward += 10.0f;
+		if (attacker)
+		{
+			attacker->reward += attack_reward;
+		}
 
+		// reward -= 1.0f;
+
+		if (health <= 0)
+		{		
 			health = 0;	
 			die(attacker);
 		}
@@ -444,6 +456,12 @@ public :
 	virtual void tick()
 	{
 		Base::tick();
+
+		death_timer++;
+		if (death_timer == 100)
+		{
+			// take_damage(2,nullptr);
+		}
 
 		if (cooldown>0)
 			cooldown--;
@@ -480,40 +498,19 @@ public :
 class Minion : public Pawn
 {
 public :
-	Minion(int team) : Pawn(team,3,1,'m') {}
+	Minion(int team) : Pawn(team,1,1,'m',1,1,2) {}
 };
 
 class Hero : public Pawn
 {
 public :
-	Hero(int team) : Pawn(team,10,5,'H') {}
+	Hero(int team) : Pawn(team,1,3,'H',3,2,10) {}
 	virtual void die(Pawn* attacker)
 	{
 		world->quit = true;
 
 		brain->flush(SingleFrameSp());
 	}
-
-	virtual Pawn* find_target()
-	{
-		int best_dist = square(2);
-		Pawn* best = nullptr;
-		for (auto a:world->agents)
-		{
-			auto b = dynamic_cast<Pawn*>(a.get());
-			if (b && b != this && b->team != team)
-			{
-				auto dist = distance(a->pos,b->pos);
-				if (dist < best_dist)
-				{
-					// LOG(INFO) << "found_target" << dist << a->pos.x << "," << a->pos.y << ":" << b->pos.x << b->pos.y;
-					best_dist = dist;
-					best = b;
-				}
-			}
-		}			
-		return best;
-	}	
 };
 
 class HeroBrain : public AgentBrain
