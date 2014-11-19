@@ -20,6 +20,11 @@ DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
 DEFINE_int32(learning_steps_total, 200000, "learning_steps_total");
 DEFINE_int32(epsilon_min, 0.1, "epsilon_min");
 
+bool is_valid_reward(float reward) { return reward >= -1.0 && reward <= 1.0; }
+bool is_valid_action(int action) { return action >= 0 && action < num_actions; }
+bool is_valid_epsilon(float eps) { return eps >= 0.0 && eps <= 1.0; }
+bool is_valid_q(float val) { return !std::isnan(val); }
+
 struct Experience
 {
 	InputFrames input_frames;
@@ -27,12 +32,13 @@ struct Experience
 	float reward;
 	SingleFrameSp next_frame;	
 
-	void check_sanity()
+	void check_sanity() const
 	{
-		assert(reward < 100 && reward > -100 );
-		assert(action >= 0 && action < num_actions);
+		assert(is_valid_reward(reward));
+		assert(is_valid_action(action));
 	}
 };
+
 
 struct Policy
 {
@@ -40,7 +46,11 @@ struct Policy
 	float val;
 
 	Policy() {}
-	Policy(int action,float val) : action(action), val(val) {}
+	Policy(int action,float val) : action(action), val(val) 
+	{
+		assert(is_valid_action(action));
+		assert(is_valid_q(val));
+	}
 };
 
 class AnnealedEpsilon
@@ -70,8 +80,10 @@ public:
 
 	bool should_do_random_action() const
 	{
-		float dice = std::uniform_real_distribution<float>(0,1)(random_engine);		
-		return dice < get();
+		const float dice = std::uniform_real_distribution<float>(0,1)(random_engine);		
+		const float eps = get();
+		assert(is_valid_epsilon(eps));
+		return dice < eps;
 	}
 
 	void operator ++()
@@ -248,7 +260,11 @@ public :
 
 		Policy get_policy(int index)
 		{
-			auto q_at = [&](int action){return net.q_values_blob->data_at(index,action,0,0);};
+			auto q_at = [&](int action){
+				auto q =  net.q_values_blob->data_at(index,action,0,0);
+				assert(is_valid_q(q));
+				return q;
+			};
 
 			Policy best(0,q_at(0));
 
@@ -322,9 +338,8 @@ public :
 
 				float r = e->next_frame ? e->reward + net.gamma * p.val : e->reward;			
 
-				assert(!std::isnan(e->reward));
-				assert(!e->next_frame || !std::isnan(p.val));
-				assert(!std::isnan(r));
+				e->check_sanity();
+				assert(is_valid_q(r));
 				
 				for (const auto& f : e->input_frames)
 				{	
@@ -348,11 +363,11 @@ public :
 
 			// LOG(INFO) << &net;
 
-			// net.check_sanity();
+			net.check_sanity();
 
 			net.solver->Step(1);
 
-			// net.check_sanity();
+			net.check_sanity();
 
 		// 	auto net_ = net.net;
 
@@ -369,23 +384,17 @@ public :
 
 	void check_sanity()
 	{
-		// LOG(INFO) << "checking!";
-		auto check_layer = [&](const char* name) {
-			// std::cout << name << v;
-			auto layer = net->layer_by_name(name);
-			assert(layer);
+		for (auto layer : net->layers())
+		{
 			auto& blobs = layer->blobs();
-			assert(blobs.size());
-			auto blob = blobs.front();
-			assert(blob);
-			auto v = blob->data_at(1, 0, 0, 0);
-			assert(!std::isnan(v));
-		};
-
-		check_layer("conv1_layer");
-		check_layer("conv2_layer");
-		check_layer("ip1_layer");
-		check_layer("ip2_layer");
+			if (blobs.size())
+			{
+				auto blob = blobs.front();
+				assert(blob);
+				auto v = blob->data_at(0, 0, 0, 0);
+				assert(!std::isnan(v));
+			}
+		}
 	}
 
 	typedef shared_ptr<caffe::Blob<float>> BlobSp;

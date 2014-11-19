@@ -51,14 +51,21 @@ public:
 	World* world;
 	Vector pos;
 	bool pending_kill;
-	Vector saved;	
 
 	Agent()
-	: world(world), pos(0,0), saved(0,0), pending_kill(false)
+	: world(world), pos(0,0), pending_kill(false)
 	{}
 
+	virtual void check_sanity() const
+	{
+		assert(world);
+	}
+
 	virtual void forward() {}
-	virtual void tick() {}
+	virtual void tick() 
+	{
+		check_sanity();
+	}
 	virtual void backward() {}
 	virtual std::string detail() { return str(format("pos(%3d,%3d) ")%pos.x%pos.y); }
 	virtual std::string one_letter() { return "*"; }
@@ -140,6 +147,7 @@ public:
 		for (auto a : agents)
 		{
 			a->tick();
+			assert(!is_invalid(a->pos));
 		}
 
 		for (auto a : agents)
@@ -212,8 +220,17 @@ public:
 		}
 	}
 
+	virtual void check_sanity() const
+	{
+		Base::check_sanity();
+
+		assert(!std::isnan(reward));
+	}
+
 	virtual void tick()
 	{
+		Base::tick();
+
 		do_action(action);
 	}
 
@@ -223,7 +240,7 @@ public:
 
 		if (brain)
 		{
-			brain->backward(reward);
+			brain->backward(std::min(1.0f,std::max(-1.0f,reward)));
 		}
 	}
 
@@ -409,6 +426,18 @@ public :
 		num_actions += 1;
 	}
 
+	virtual void check_sanity() const
+	{
+		Base::check_sanity();
+
+		assert(health <= max_health);
+		assert(cooldown <= max_cooldown);
+		assert(range >= 0);
+		assert(team >= 0 && team < 2);
+		assert(!std::isnan(attack_reward));
+		assert(!std::isnan(kill_reward));
+	}
+
 	virtual Pawn* find_target()
 	{
 		int best_dist = square(range+1);
@@ -416,7 +445,7 @@ public :
 		for (auto a:world->agents)
 		{
 			auto b = dynamic_cast<Pawn*>(a.get());
-			if (b && b != this && b->team != team)
+			if (b && b != this && !b->pending_kill && b->team != team)
 			{
 				auto dist = distance(pos,b->pos);
 				if (dist < best_dist)
@@ -432,7 +461,7 @@ public :
 
 	virtual void die(Pawn* attacker)
 	{	
-		if (attacker)
+		if (attacker && !attacker->pending_kill)
 		{
 			attacker->death_timer = 0;
 			attacker->reward += kill_reward;
@@ -446,7 +475,7 @@ public :
 	virtual void take_damage(int damage, Pawn* attacker)
 	{	
 		health -= damage;
-		if (attacker)
+		if (attacker && !attacker->pending_kill)
 		{
 			attacker->reward += attack_reward;
 		}
@@ -505,13 +534,13 @@ public :
 class Minion : public Pawn
 {
 public :
-	Minion(int team) : Pawn(team,1,1,'m',1,1,2) {}
+	Minion(int team) : Pawn(team,1,1,'m',1,0.1f,0.5f) {}
 };
 
 class Hero : public Pawn
 {
 public :
-	Hero(int team) : Pawn(team,1,3,'H',3,2,10) {}
+	Hero(int team) : Pawn(team,1,3,'H',3,0.2f,1.0f) {}
 	virtual void die(Pawn* attacker)
 	{
 		world->quit = true;
