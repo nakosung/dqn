@@ -1,5 +1,8 @@
 auto ANSI = "\033[";
 
+DEFINE_int32(display_interval, 1, "display_interval");
+DEFINE_int32(display_after, 20000, "display_after");
+
 struct ANSI_ESCAPE
 {
 	static std::string gotoxy(int x, int y)
@@ -80,7 +83,7 @@ public:
 	}
 	bool should_display() const
 	{
-		return clock % FLAGS_display_interval == 0;
+		return clock >= FLAGS_display_after && clock % FLAGS_display_interval == 0;
 	}
 
 	Vector size;

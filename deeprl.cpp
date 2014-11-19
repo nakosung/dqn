@@ -14,7 +14,6 @@ using boost::str;
 using boost::format;
 
 DEFINE_int32(gpu, 0, "GPU mode on given device ID");
-DEFINE_int32(display_interval, 100, "display_interval");
 DEFINE_int32(iterations,1000000, "iterations");
 DEFINE_string(solver, "",  "The solver definition protocol buffer text file.");
 
@@ -114,8 +113,8 @@ int main(int argc, char** argv)
 		spawn_minion(1);
 		spawn_minion(1);
 		spawn_minion(1);	
-		spawn_hero(0);
-		spawn_hero(1);
+		// spawn_hero(0);
+		// spawn_hero(1);
 
 		for (; !w.quit; ++iter)
 		{
