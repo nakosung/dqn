@@ -81,7 +81,7 @@ int main(int argc, char** argv)
 			exit(-1);
 		};
 
-		auto x_dist = std::uniform_int_distribution<>(0,w.size.x);
+		auto x_dist = std::uniform_int_distribution<>(0,w.size.x-1);
 
 		int minion_id = 0;
 
