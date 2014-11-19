@@ -1,5 +1,4 @@
 // fix
-enum { batch_size = 32 };
 enum { temporal_window = 3 };	
 enum { world_size = 16 };
 
@@ -7,7 +6,7 @@ enum { world_size = 16 };
 enum { num_states = world_size * world_size };
 enum { num_actions = 6 };
 
-enum { MinibatchSize = batch_size };
+enum { MinibatchSize = 32 };
 enum { InputDataSize = num_states * (temporal_window + 1) };
 enum { OutputCount = num_actions };
 
@@ -284,12 +283,12 @@ public :
   		TargetLayerInputData target_input;
   		FilterLayerInputData filter_input;
 
-  		std::array<const Experience*,batch_size> samples;
-		std::array<InputFrames,batch_size> input_frames_batch;		
+  		std::array<const Experience*,MinibatchSize> samples;
+		std::array<InputFrames,MinibatchSize> input_frames_batch;		
 
 		void train()
 		{			
-			for (int k=0; k<batch_size; ++k)
+			for (int k=0; k<MinibatchSize; ++k)
 			{
 				auto e = net.replay_memory.get_random();
 				e.check_sanity();
@@ -349,11 +348,11 @@ public :
 
 			// LOG(INFO) << &net;
 
-			net.check_sanity();
+			// net.check_sanity();
 
 			net.solver->Step(1);
 
-			net.check_sanity();
+			// net.check_sanity();
 
 		// 	auto net_ = net.net;
 

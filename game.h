@@ -148,8 +148,15 @@ public:
 		}				
 	}
 
+	bool is_invalid(const Vector& x) const
+	{
+		return (x.x < 0 || x.y < 0 || x.x >= world_size || x.y >= world_size);
+	}
+
 	bool is_vacant(const Vector& x) const
 	{
+		if (is_invalid(x)) return false;
+
 		for (auto a : agents)
 		{
 			if (a->pos == x)

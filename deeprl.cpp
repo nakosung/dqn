@@ -108,12 +108,12 @@ int main(int argc, char** argv)
 				return m;
 			});			
 		};	
-		// spawn_minion(0);
-		// spawn_minion(0);
-		// spawn_minion(0);
-		// spawn_minion(1);
-		// spawn_minion(1);
-		// spawn_minion(1);	
+		spawn_minion(0);
+		spawn_minion(0);
+		spawn_minion(0);
+		spawn_minion(1);
+		spawn_minion(1);
+		spawn_minion(1);	
 		spawn_hero(0);
 		spawn_hero(1);
 
