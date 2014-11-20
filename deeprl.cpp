@@ -15,7 +15,7 @@ using boost::format;
 
 DEFINE_int32(gpu, 0, "GPU mode on given device ID");
 DEFINE_int32(iterations,1000000, "iterations");
-DEFINE_string(solver, "",  "The solver definition protocol buffer text file.");
+DEFINE_string(solver, "dqn_solver.prototxt",  "The solver definition protocol buffer text file.");
 
 #include "dqn.h"
 #include "game.h"
@@ -27,7 +27,7 @@ int main(int argc, char** argv)
 	caffe::GlobalInit(&argc,&argv);
 	// google::InitGoogleLogging(argv[0]);
   	// google::InstallFailureSignalHandler();
- 	google::LogToStderr();
+ 	// google::LogToStderr();
 
 	if (FLAGS_gpu)
 	{
@@ -44,6 +44,8 @@ int main(int argc, char** argv)
 	boost::shared_ptr<DeepNetwork> minion_net(new DeepNetwork);
 	
 	typedef boost::shared_ptr<AgentBrain> BrainSp;
+	std::array<int,2> scores;
+	std::fill(scores.begin(),scores.end(),0);
 	enum { num_teams = 2 };
 	enum { minions_per_team = 3 };
 	enum { num_heroes = 2 };
@@ -58,15 +60,15 @@ int main(int argc, char** argv)
 		});
 		return hero_brains;
 	};
-
+	
 	auto hero_brains = gen_brains(num_heroes,hero_net,[=]{return new HeroBrain;});
 	auto minion_brains = gen_brains(num_minions,minion_net,[=]{return new HeroBrain;});	
 
 	int epoch = 0;
 	for (int iter = 0; iter<FLAGS_iterations;epoch++)
 	{
-		World w(random_engine);	
-		Display disp(w,epoch,iter);		
+		World w(random_engine,iter);	
+		Display disp(w,epoch,iter,scores);		
 
 		auto pos_gen = [&](std::function<Vector()> gen)
 		{
@@ -89,8 +91,8 @@ int main(int argc, char** argv)
 			auto brain = hero_brains[team];
 			brain->world = &w;
 			return w.spawn([=]{
-				auto m = new Hero(team);
-				m->brain = brain.get();
+				auto m = new Hero(team);				
+				m->brain = brain;				
 				m->pos = pos;
 				return m;
 			});			
@@ -102,7 +104,7 @@ int main(int argc, char** argv)
 			assert(brain.get()!=nullptr);
 			return w.spawn([=]{
 				auto m = new Minion(team);
-				m->brain = brain.get();
+				m->brain = brain;
 				m->pos = pos;
 				return m;
 			});			
@@ -110,13 +112,13 @@ int main(int argc, char** argv)
 		spawn_minion(0);
 		spawn_minion(0);
 		spawn_minion(0);
-		spawn_minion(1);
-		spawn_minion(1);
-		spawn_minion(1);	
-		// spawn_hero(0);
-		// spawn_hero(1);
+		// spawn_minion(1);
+		// spawn_minion(1);
+		// spawn_minion(1);	
+		spawn_hero(0);
+		spawn_hero(1);
 
-		for (; !w.quit; ++iter)
+		while (!w.quit)
 		{
 			w.tick();
 			disp.tick();

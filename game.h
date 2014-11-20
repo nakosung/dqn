@@ -1,7 +1,12 @@
 auto ANSI = "\033[";
 
 DEFINE_int32(display_interval, 1, "display_interval");
-DEFINE_int32(display_after, 20000, "display_after");
+DEFINE_int32(display_after, 2000, "display_after");
+
+bool is_valid_team( int team )
+{
+	return team == 0 or team == 1;
+}
 
 struct ANSI_ESCAPE
 {
@@ -64,6 +69,8 @@ public:
 		assert(world);
 	}
 
+	virtual void game_over(int winner) {}
+
 	virtual void forward() {}
 	virtual void tick() 
 	{
@@ -88,13 +95,14 @@ public:
 
 	Vector size;
 	std::list< shared_ptr<Agent> > agents;	
-	int clock;
+	int& clock;
 	std::deque<std::string> events;
-	bool quit;
+	bool quit;	
+	int final_winner;
 	
-	World(std::mt19937& random_engine) 
-	: random_engine(random_engine), size(world_size,world_size), clock(0), quit(false)
-	{		
+	World(std::mt19937& random_engine, int& clock) 
+	: random_engine(random_engine), size(world_size,world_size), clock(clock), quit(false), final_winner(-1)
+	{				
 	}
 
 	void log_event(std::string s)
@@ -102,6 +110,20 @@ public:
 		events.push_back(s);
 		if (events.size() > 10)
 			events.pop_front();
+	}
+
+	void game_over(int winner)
+	{
+		final_winner = winner;
+
+		for (auto a : agents)
+		{
+			if (!a->pending_kill)
+			{				
+				a->game_over(winner);			
+			}
+		}
+		quit = true;
 	}
 
 	Agent* spawn(std::function<Agent*(void)> l)
@@ -157,6 +179,24 @@ public:
 		{
 			a->backward();
 		}				
+
+		collect_garbage();
+	}
+
+	void collect_garbage()
+	{
+		for (auto itr = agents.begin(); itr != agents.end();)
+		{
+			auto agent = *itr;
+			if (agent->pending_kill)
+			{
+				agents.erase(itr++);
+			}
+			else
+			{
+				++itr;
+			}
+		}
 	}
 
 	bool is_invalid(const Vector& x) const
@@ -198,11 +238,11 @@ public:
 	typedef Agent Base;
 
 	float reward;
-	AgentBrain* brain;
+	boost::shared_ptr<AgentBrain> brain;
 
 	Actable() : num_actions(1), reward(0), brain(nullptr) {}
 
-	virtual std::string detail() { return str(format("%s reward(%f) brain(%s)")%Base::detail()%reward%(brain ? brain->detail() : "none")); }
+	virtual std::string detail() { return str(format("%s R(%.2f) B(%s)")%Base::detail()%reward%(brain ? brain->detail() : "none")); }
 
 	int num_actions;
 	int action;	
@@ -215,11 +255,16 @@ public:
 
 		if (brain)
 		{
-			action = brain->forward(this);
+			for (;;)
+			{
+				action = brain->forward(this);
+				if (is_valid_action(action)) break;
+			}
 		}
 		else
 		{
 			action = random_action();
+			assert(is_valid_action(action));
 		}
 	}
 
@@ -234,7 +279,10 @@ public:
 	{
 		Base::tick();
 
-		do_action(action);
+		if (is_valid_action(action))
+		{
+			do_action(action);
+		}		
 	}
 
 	virtual void backward() 
@@ -243,6 +291,7 @@ public:
 
 		if (brain)
 		{
+			reward *= 0.1f;			
 			brain->backward(std::min(1.0f,std::max(-1.0f,reward)));
 		}
 	}
@@ -259,7 +308,7 @@ public:
 		}
 	}
 
-	virtual bool is_valid_action(int action) { return true; }
+	virtual bool is_valid_action(int action) const { return ::is_valid_action(action); }
 	virtual void do_action(int action) {}
 };
 
@@ -285,7 +334,7 @@ public:
 		num_actions += move_max;
 	}
 
-	virtual bool is_valid_action(int action)
+	virtual bool is_valid_action(int action) const
 	{
 		if (action < move_action_offset)
 			return super::is_valid_action(action);
@@ -298,7 +347,10 @@ public:
 		if (action < move_action_offset)
 			return super::do_action(action);
 
-		do_move(dir_vec[action - move_action_offset]);
+		int move = action - move_action_offset;
+		assert(move >= 0 && move < move_max);
+
+		do_move(dir_vec[move]);
 	}
 
 	bool can_move(const Vector& dir) const
@@ -314,7 +366,6 @@ public:
 
 		if (world->can_move_to(this,pos,new_pos))
 		{
-			//LOG(INFO) << "moved!" << this << " : " << new_pos.x << "," << new_pos.y << " <- " << pos.x << ", " << pos.y;
 			pos = new_pos;
 		}
 	}
@@ -329,12 +380,22 @@ public:
 	int& clock;
 	int epoch;
 
-	Display(World& world,int epoch,int& clock) 
-	: world(world), needs_clear(true), epoch(epoch), clock(clock) 
-	{}
+	std::array<int,2>& scores;			
+
+	Display(World& world,int epoch,int& clock,std::array<int,2>& scores) 
+	: world(world), needs_clear(true), epoch(epoch), clock(clock), scores(scores)
+	{
+	}	
 
 	void tick()
 	{
+		if (world.quit)
+		{			
+			if (is_valid_team(world.final_winner))
+			{
+				scores[world.final_winner] ++;
+			}			
+		}
 		if (world.should_display())
 		{
 			dump();
@@ -342,60 +403,71 @@ public:
 		}		
 	}	
 
+	std::array<std::string,20> lines;
+	std::string empty;
+
 	void dump()
 	{
 		if (needs_clear)
 		{
-			//needs_clear = false;
+			needs_clear = false;
 			std::cout << ANSI << "1J";
 		}		
 
 		std::list<Agent*> dirties;
+		std::vector<std::string> newlines;
 		int y = 0;
-		auto logline = [&](std::string x) { std::cout << ANSI_ESCAPE::gotoxy(world.size.x+5,++y) << str(format("%-50s")%x); };
+		auto logline = [&](std::string x) { newlines.push_back(x); };
 		logline(str(format("agents %3d clock %8d epoch %8d")%world.agents.size()%clock%epoch));
+		logline(str(format("score: %d : %d")%scores[0]%scores[1]));
 
 		// I know, it's too slow.. :)
+		std::string reset(str(format("%s40m")%ANSI));
 		for (int y=0; y<world.size.y; ++y)
 		{
-			std::string reset(str(format("%s40m")%ANSI));
-			std::cout << ANSI_ESCAPE::gotoxy(0,y) << reset;		
+			std::string line = reset + ANSI_ESCAPE::gotoxy(0,y);			
 
-			bool found = false;
 			for (int x=0; x<world.size.x; ++x)
 			{
+				bool found = false;
 				for (auto a : world.agents)
 				{
-					if (a->pos.x == x && a->pos.y == y && !a->pending_kill)
+					if (a->pos.x == x && a->pos.y == y)
 					{			
 						found = true;			
-						std::cout << a->one_letter();
+						line += a->one_letter();
 						break;
 					}								
 				}
 
 				if (!found)
 				{
-					std::cout << " ";					
+					line += " ";					
 				}
 			}
 
+			std::cout << line;
 		}
+
 		for (auto a : world.agents)
 		{
-			if (!a->pending_kill)
-			{
-				logline(a->detail());
-			}			
+			logline(a->detail());
 		}
 		for (auto a : world.events)
 		{
 			logline(a);
 		}
-		while (y<20)
+
+		for (int line=0; line<lines.size(); ++line)
 		{
-			logline("");
-		}				
+			const auto& newline = line < newlines.size() ? newlines[line] : empty;
+			if (newline != lines[line])
+			{
+				lines[line] = newline;
+				std::cout << ANSI_ESCAPE::gotoxy(world.size.x+5,line+1) << str(format("%-50s")%newline);
+			}
+		}	
+
 		std::cout << ANSI_ESCAPE::gotoxy(0,world.size.y+1) << ANSI << "47;0m";
 	}
 };
@@ -421,12 +493,26 @@ public :
 	std::string colorize(std::string in) const { return str(format("%s%dm%s%s0m")%ANSI%(team+44)%in%ANSI); }
 
 	virtual std::string one_letter() { return colorize(str(format("%c")%code)); }
-	virtual std::string detail() { return colorize(str(format("%c[team:%d] %s hp:%d")%code%team%Base::detail()%health)); }
+	virtual std::string detail() { return colorize(str(format("%c[t:%d] hp:%d %s")%code%team%health%Base::detail())); }
 
 	Pawn(int team,int in_max_cooldown,int in_max_health, char code, int range, float attack_reward, float kill_reward)
 	: max_health(in_max_health), max_cooldown(in_max_cooldown), team(team), health(in_max_health), cooldown(0), code(code), death_timer(0), range(range), attack_reward(attack_reward), kill_reward(kill_reward)
 	{
 		num_actions += 1;
+	}
+
+	virtual void game_over(int winner)
+	{
+		if (team == winner)
+		{
+			reward = 100.0f;
+		}
+		else
+		{
+			reward = -100.0f;
+		}
+
+		brain->flush(SingleFrameSp());
 	}
 
 	virtual void check_sanity() const
@@ -441,7 +527,7 @@ public :
 		assert(!std::isnan(kill_reward));
 	}
 
-	virtual Pawn* find_target()
+	virtual Pawn* find_target() const
 	{
 		int best_dist = square(range+1);
 		Pawn* best = nullptr;
@@ -506,7 +592,7 @@ public :
 			cooldown--;
 	}
 
-	virtual bool is_valid_action(int action)
+	virtual bool is_valid_action(int action) const
 	{
 		if (action == 0)
 		{	
@@ -540,13 +626,19 @@ public :
 	Minion(int team) : Pawn(team,1,1,'m',1,0.1f,0.5f) {}
 };
 
+class RangeMinion : public Pawn
+{
+public :
+	RangeMinion(int team) : Pawn(team,3,1,'r',2,0.1f,0.5f) {}
+};
+
 class Hero : public Pawn
 {
 public :
-	Hero(int team) : Pawn(team,1,3,'H',3,0.2f,1.0f) {}
+	Hero(int team) : Pawn(team,5,3,'H',3,0.2f,1.0f) {}
 	virtual void die(Pawn* attacker)
 	{
-		world->quit = true;
+		world->game_over(attacker ? attacker->team : -1);
 
 		brain->flush(SingleFrameSp());
 	}
@@ -558,7 +650,11 @@ public:
 	virtual int forward( Actable* agent )
 	{
 		// LOG(INFO) << "hero brain forward, calling super";
-		return Brain::forward(get_frame(agent),[&]{return agent->random_action();});
+		return Brain::forward(
+			get_frame(agent),
+			[&]{return agent->random_action();},
+			[&](int action){return agent->is_valid_action(action);}
+			);
 	}
 
 	SingleFrameSp get_frame(Actable* agent) const
@@ -588,6 +684,7 @@ public:
 			{
 				value = 0.75f;
 			}
+			value -= 0.1f * a->health / a->max_health;
 			write(a->pos.x,a->pos.y,value);
 		}
 		return single_frame;
