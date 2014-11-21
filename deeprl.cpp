@@ -13,7 +13,7 @@ using caffe::Blob;
 using boost::str;
 using boost::format;
 
-DEFINE_int32(gpu, 0, "GPU mode on given device ID");
+DEFINE_bool(gpu, false, "Use GPU to brew Caffe");
 DEFINE_int32(iterations,1000000, "iterations");
 DEFINE_string(solver, "dqn_solver.prototxt",  "The solver definition protocol buffer text file.");
 
@@ -62,7 +62,7 @@ int main(int argc, char** argv)
 	};
 	
 	auto hero_brains = gen_brains(num_heroes,hero_net,[=]{return new HeroBrain;});
-	auto minion_brains = gen_brains(num_minions,minion_net,[=]{return new HeroBrain;});	
+	auto minion_brains = gen_brains(num_minions,hero_net,[=]{return new HeroBrain;});	
 
 	int epoch = 0;
 	for (int iter = 0; iter<FLAGS_iterations;epoch++)
@@ -112,9 +112,9 @@ int main(int argc, char** argv)
 		spawn_minion(0);
 		spawn_minion(0);
 		spawn_minion(0);
-		// spawn_minion(1);
-		// spawn_minion(1);
-		// spawn_minion(1);	
+		spawn_minion(1);
+		spawn_minion(1);
+		spawn_minion(1);	
 		spawn_hero(0);
 		spawn_hero(1);
 

@@ -1,24 +1,14 @@
-// fix
-enum { temporal_window = 3 };	
-enum { world_size = 16 };
-
-// var per
-enum { num_states = world_size * world_size };
-enum { num_actions = 6 };
-
-enum { MinibatchSize = 32 };
-enum { InputDataSize = num_states * (temporal_window + 1) };
-enum { OutputCount = num_actions };
-
-typedef std::array<float,num_actions> net_input_type;
-typedef std::array<float,num_states> SingleFrame;
-typedef boost::shared_ptr<SingleFrame> SingleFrameSp;
-typedef std::array<SingleFrameSp,temporal_window+1> InputFrames;
+#include "config.h"
+#include "single_frame.h"
 
 DEFINE_int32(experience_size, 30000, "experience_size");
 DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
 DEFINE_int32(learning_steps_total, 200000, "learning_steps_total");
 DEFINE_int32(epsilon_min, 0.1, "epsilon_min");
+
+typedef std::array<float,num_actions> net_input_type;
+typedef boost::shared_ptr<SingleFrame> SingleFrameSp;
+typedef std::array<SingleFrameSp,temporal_window+1> InputFrames;
 
 bool is_valid_action(int action) { return action >= 0 && action < num_actions; }
 bool is_valid_reward(float reward) { return reward >= -1.0 && reward <= 1.0; }
@@ -39,7 +29,6 @@ struct Experience
 	}
 };
 
-
 struct Policy
 {
 	int action;
@@ -47,10 +36,15 @@ struct Policy
 
 	Policy() {}
 	Policy(void*) : action(-1), val(FLT_MIN) {}
-	Policy(int action,float val) : action(action), val(val) 
+	Policy(int action,float val = FLT_MIN) : action(action), val(val) 
 	{
 		assert(is_valid_action(action));
 		assert(is_valid_q(val));
+	}
+
+	std::string to_string() const 
+	{ 
+		return val == FLT_MIN ? str(format("%d:rand")%action) : str(format("%d:%.2f")%action%val); 
 	}
 };
 
@@ -65,9 +59,7 @@ public:
 
 	AnnealedEpsilon()
 	: is_learning(true), age(0), epsilon_min(FLAGS_epsilon_min), learning_steps_burnin(FLAGS_learning_steps_burnin < 0 ? FLAGS_learning_steps_total / 10 : FLAGS_learning_steps_burnin), learning_steps_total(FLAGS_learning_steps_total), epsilon_test_time(0.1)
-	{
-		std::cout << "learning_steps_burnin:" << learning_steps_burnin << "\n";
-	}
+	{}
 
 	float get() const
 	{
@@ -83,7 +75,7 @@ public:
 
 	bool should_do_random_action() const
 	{
-	const float dice = std::uniform_real_distribution<float>(0,1)(random_engine);		
+		const float dice = std::uniform_real_distribution<float>(0,1)(random_engine);		
 		const float eps = get();
 		assert(is_valid_epsilon(eps));
 		return dice < eps;
@@ -172,9 +164,6 @@ public :
 
 		void input( const FramesLayerInputData& frames, const TargetLayerInputData& target, const FilterLayerInputData& filter )
 		{
-			// assert(std::all_of(frames.begin(),frames.end(),[=](float x){return !std::isnan(x);}));
-			// assert(std::all_of(target.begin(),target.end(),[=](float x){return !std::isnan(x);}));
-			// assert(std::all_of(filter.begin(),filter.end(),[=](float x){return !std::isnan(x);}));
 			frames_input_layer->Reset(const_cast<float*>(frames.data()),dummy_input_data.data(),MinibatchSize);
 			target_input_layer->Reset(const_cast<float*>(target.data()),dummy_input_data.data(),MinibatchSize);
 			filter_input_layer->Reset(const_cast<float*>(filter.data()),dummy_input_data.data(),MinibatchSize);
@@ -209,7 +198,7 @@ public :
 				assert(blob->width() == w);
 			};
 
-			check_blob_size("frames",MinibatchSize,temporal_window+1,world_size,world_size);
+			check_blob_size("frames",MinibatchSize,temporal_window+1,sight_diameter,sight_diameter);
 			check_blob_size("target",MinibatchSize,num_actions,1,1);
 			check_blob_size("filter",MinibatchSize,num_actions,1,1);
 		}
@@ -228,30 +217,16 @@ public :
 		std::array<Policy,N>& evaluate(const std::array<InputFrames,N>& input_frames_batch,std::function<bool(int)> is_valid_action)
 		{			
 			FramesLayerInputData frames_input;
-			auto target = frames_input.begin();			
+			auto target = frames_input.begin();
 			for (const auto& input_frames : input_frames_batch)
 			{
-				for (const auto& input_frame : input_frames)
-				{				
-					if (input_frame)
-					{
-						std::copy(input_frame->begin(),input_frame->end(),target);						
-						assert(input_frame->size() == num_states);
-					}	
-					else
-					{
-						std::fill(target, target + num_states, 0);
-					}					
-					target += num_states;
-				}
-				assert(input_frames.size() == temporal_window+1);
+				SingleFrame::fill_frames(target,input_frames);
 			}  
 			for (int index=N; index<MinibatchSize; ++index)
 			{
 				std::fill(target, target + InputDataSize, 0);
 				target += InputDataSize;
 			}
-			assert(target == frames_input.end());
 	  
 			net.feeder.input(frames_input);
 			net.net->ForwardPrefilled(nullptr);
@@ -282,11 +257,7 @@ public :
 					}				
 				}				
 			}	
-
-			if (net.needs_explanation)
-			{
-				net.explanation = str(format("%d:%.2f")%best.action%best.val);
-			}		
+			
 			// std::cout << str(format("%d:%.2f")%best.action%best.val) << "\n";
 			return best;
 		}
@@ -330,7 +301,6 @@ public :
 			auto target = target_input.begin();
 			auto filter = filter_input.begin();
 
-			std::fill(frames_input.begin(),frames_input.end(),0);
 			std::fill(target_input.begin(),target_input.end(),0);
 			std::fill(filter_input.begin(),filter_input.end(),0);
   	
@@ -343,55 +313,19 @@ public :
 
 				e->check_sanity();
 				assert(is_valid_q(r));
+
+				SingleFrame::fill_frames(frame,e->input_frames);
 				
-				for (const auto& f : e->input_frames)
-				{	
-					std::copy(f->begin(),f->end(),frame);
-					frame += f->size();
-				}
 				target[e->action] = r;
 				filter[e->action] = 1.0f;
-
-				// std::string s;
-				// s = str(format("%d %p action(%d) target")%index%e%e->action);
-				// for (int action = 0; action < num_actions; ++action)
-				// {
-				// 	s += str(format(":%f")%target[action]);
-				// }
-				// s += "\tfilter";
-				// for (int action = 0; action < num_actions; ++action)
-				// {
-				// 	s += str(format(":%f")%filter[action]);
-				// }
-				// std::cout << s << "\n";				
-
+				
 				target += num_actions;
 				filter += num_actions;
-
 			}
 
 			net.feeder.input(frames_input,target_input,filter_input);
 
-			// net.check_sanity();
-
-			// LOG(INFO) << &net;
-
-			net.check_sanity();
-
 			net.solver->Step(1);
-
-			net.check_sanity();
-
-		// 	auto net_ = net.net;
-
-		// 	LOG(INFO) << "conv1:" <<
-  //     net_->layer_by_name("conv1_layer")->blobs().front()->data_at(1, 0, 0, 0);
-  // LOG(INFO) << "conv2:" <<
-  //     net_->layer_by_name("conv2_layer")->blobs().front()->data_at(1, 0, 0, 0);
-  // LOG(INFO) << "ip1:" <<
-  //     net_->layer_by_name("ip1_layer")->blobs().front()->data_at(1, 0, 0, 0);
-  // LOG(INFO) << "ip2:" <<
-  //     net_->layer_by_name("ip2_layer")->blobs().front()->data_at(1, 0, 0, 0);
 		}
 	};
 
@@ -415,10 +349,8 @@ public :
 	typedef shared_ptr<caffe::Solver<float>> SolverSp;
 
 	Feeder feeder;
-	ReplayMemory replay_memory;
-	bool needs_explanation;
-	std::string explanation;
-
+	ReplayMemory replay_memory;	
+	
 	Evaluator<1> eval_for_prediction;
 	Evaluator<MinibatchSize> eval_for_train;
 	Trainer trainer;
@@ -437,7 +369,7 @@ public :
 	}
 	
 	DeepNetwork()
-	: gamma(0.95), trainer(*this), eval_for_prediction(*this), eval_for_train(*this), replay_memory(*this), feeder(*this), needs_explanation(false)
+	: gamma(0.95), trainer(*this), eval_for_prediction(*this), eval_for_train(*this), replay_memory(*this), feeder(*this)
 	{		
 		net_init();
 	}
@@ -465,23 +397,23 @@ public :
 		return eval_for_prediction.evaluate(std::array<InputFrames,1>{{input_frames}},is_valid_action).front();
 	}	
 
-	int predict(const InputFrames& input_frames,std::function<int()> random_action,std::function<bool(int)> is_valid_action)
+	Policy predict(const InputFrames& input_frames,std::function<int()> random_action,std::function<bool(int)> is_valid_action)
 	{		
 		if (epsilon.should_do_random_action())
 		{
-			return random_action();
+			return Policy(random_action());
 		}
 		else
 		{
 			Policy p = policy(input_frames,is_valid_action);
 			if (is_valid_action(p.action))
 			{
-				return p.action;
+				return p;
 			}
 			else
 			{
 				std::cout << "couldn't predict well\n";
-				return random_action();
+				return Policy(random_action());
 			}
 		}
 	}		
@@ -495,76 +427,4 @@ public :
 	}	
 };
 
-class Brain
-{
-public:
-	typedef boost::shared_ptr<DeepNetwork> NetworkSp;
-
-	int forward_passes;
-	
-	NetworkSp network;
-	Experience current_experience;
-
-	bool has_pending_experience;
-
-	Brain()
-	: forward_passes(0), has_pending_experience(false)
-	{}
-
-	void flush(SingleFrameSp next_frame)
-	{
-		if (has_pending_experience)
-		{
-			if (!(current_experience.reward < 100))
-			{
-				std::cout << "invalid reward: " << current_experience.reward;
-				exit(-1);
-			}
-			current_experience.next_frame = next_frame;					
-			network->replay_memory.push(current_experience);				
-			network->train();
-
-			has_pending_experience = false;
-		}
-	}
-
-	std::string q_values_str;
-	std::string detail() const { return q_values_str; }
-
-	virtual bool needs_explanation() const { return false; }
-
-	int forward(SingleFrameSp frame,std::function<int()> random_action,std::function<bool(int)> is_valid_action)
-	{
-		forward_passes++;
-		
-		flush(frame);
-
-		if (forward_passes > temporal_window + 1 && network->epsilon.is_learning)
-		{
-			has_pending_experience = true;
-			std::copy(frame_window.begin(), frame_window.end(), current_experience.input_frames.begin());
-			network->needs_explanation = needs_explanation();
-			current_experience.action = network->predict(current_experience.input_frames,random_action,is_valid_action);
-			network->needs_explanation = false;
-			q_values_str = network->explanation;
-
-			frame_window.pop_front();
-		}
-		else
-		{
-			// LOG(INFO) << "random action";
-			current_experience.action = random_action();
-		}
-		
-		frame_window.push_back(frame);
-		
-		return current_experience.action;
-	}
-
-	void backward(float reward)
-	{
-		current_experience.reward = reward;		
-	}	
-	
-	std::deque<SingleFrameSp> frame_window;
-};
+#include "brain.h"

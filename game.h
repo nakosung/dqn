@@ -22,6 +22,11 @@ struct Vector
 
 	Vector() {}
 	Vector(int x, int y) : x(x), y(y) {}
+
+	bool is_invalid() const
+	{
+		return (x < 0 || y < 0 || x >= world_size || y >= world_size);
+	}
 };
 
 template <typename T>
@@ -77,7 +82,7 @@ public:
 		check_sanity();
 	}
 	virtual void backward() {}
-	virtual std::string detail() { return str(format("pos(%3d,%3d) ")%pos.x%pos.y); }
+	virtual std::string detail() { return ""; }
 	virtual std::string one_letter() { return "*"; }
 };
 
@@ -172,7 +177,7 @@ public:
 		for (auto a : agents)
 		{
 			a->tick();
-			assert(!is_invalid(a->pos));
+			assert(!a->pos.is_invalid());
 		}
 
 		for (auto a : agents)
@@ -197,16 +202,11 @@ public:
 				++itr;
 			}
 		}
-	}
-
-	bool is_invalid(const Vector& x) const
-	{
-		return (x.x < 0 || x.y < 0 || x.x >= world_size || x.y >= world_size);
-	}
+	}	
 
 	bool is_vacant(const Vector& x) const
 	{
-		if (is_invalid(x)) return false;
+		if (x.is_invalid()) return false;
 
 		for (auto a : agents)
 		{
@@ -228,8 +228,7 @@ class AgentBrain : public Brain
 {
 public:	
 	World* world;
-	virtual int forward(Actable* agent ) = 0;
-	virtual bool needs_explanation() const { return world->should_display(); }
+	virtual int forward(Actable* agent ) = 0;	
 };
 
 class Actable : public Agent
@@ -472,6 +471,14 @@ public:
 	}
 };
 
+enum PawnType
+{
+	PT_minion,
+	PT_range,
+	PT_hero,
+	PT_max
+};
+
 class Pawn : public Movable
 {
 public :
@@ -486,6 +493,7 @@ public :
 	int cooldown;
 	int death_timer;
 	char code;
+	PawnType type;
 	int range;
 
 	float attack_reward, kill_reward;
@@ -493,10 +501,10 @@ public :
 	std::string colorize(std::string in) const { return str(format("%s%dm%s%s0m")%ANSI%(team+44)%in%ANSI); }
 
 	virtual std::string one_letter() { return colorize(str(format("%c")%code)); }
-	virtual std::string detail() { return colorize(str(format("%c[t:%d] hp:%d %s")%code%team%health%Base::detail())); }
+	virtual std::string detail() { return colorize(str(format("%c[t:%d] hp:%d cd:%d %s")%code%team%health%cooldown%Base::detail())); }
 
-	Pawn(int team,int in_max_cooldown,int in_max_health, char code, int range, float attack_reward, float kill_reward)
-	: max_health(in_max_health), max_cooldown(in_max_cooldown), team(team), health(in_max_health), cooldown(0), code(code), death_timer(0), range(range), attack_reward(attack_reward), kill_reward(kill_reward)
+	Pawn(PawnType type, int team,int in_max_cooldown,int in_max_health, char code, int range, float attack_reward, float kill_reward)
+	: type(type), max_health(in_max_health), max_cooldown(in_max_cooldown), team(team), health(in_max_health), cooldown(0), code(code), death_timer(0), range(range), attack_reward(attack_reward), kill_reward(kill_reward)
 	{
 		num_actions += 1;
 	}
@@ -623,19 +631,19 @@ public :
 class Minion : public Pawn
 {
 public :
-	Minion(int team) : Pawn(team,1,1,'m',1,0.1f,0.5f) {}
+	Minion(int team) : Pawn(PT_minion,team,5,2,'m',1,0.1f,0.5f) {}
 };
 
 class RangeMinion : public Pawn
 {
 public :
-	RangeMinion(int team) : Pawn(team,3,1,'r',2,0.1f,0.5f) {}
+	RangeMinion(int team) : Pawn(PT_range,team,3,1,'r',2,0.1f,0.5f) {}
 };
 
 class Hero : public Pawn
 {
 public :
-	Hero(int team) : Pawn(team,5,3,'H',3,0.2f,1.0f) {}
+	Hero(int team) : Pawn(PT_hero, team, 15,3,'H',3,0.2f,1.0f) {}
 	virtual void die(Pawn* attacker)
 	{
 		world->game_over(attacker ? attacker->team : -1);
@@ -661,30 +669,39 @@ public:
 	{		
 		SingleFrameSp single_frame(new SingleFrame);
 
-		std::fill(single_frame->begin(),single_frame->end(),0.5f);
+		auto& image = single_frame->image;
+
+		std::fill(image.begin(),image.end(),-1);
 
 		Pawn* self = dynamic_cast<Pawn*>(agent);
 
 		auto write = [&](int x, int y, float val)
 		{
-			(*single_frame)[x + y * world_size] = val;
+			Vector v(x - self->pos.x + sight_diameter/2,y - self->pos.y + sight_diameter/2);
+			if (v.x >= 0 && v.y >= 0 && v.x < sight_diameter && v.y < sight_diameter)
+			{
+				image[v.x + v.y * world_size] = val;
+			}			
 		};
+
+		for (int y=0; y<sight_diameter; ++y)
+		{
+			for (int x=0; x<sight_diameter; ++x)
+			{
+				write(x,y,-0.5f);
+			}
+		}
+
 		for (auto other : agent->world->agents)
 		{
 			Pawn* a = dynamic_cast<Pawn*>(other.get());
 			if (a == nullptr) continue;
 
-			float value = 0.0f;
-
-			if (a == agent)
-			{
-				value = 1.0f;
-			}
-			else if (a->team == self->team)
-			{
-				value = 0.75f;
-			}
-			value -= 0.1f * a->health / a->max_health;
+			float value = a->health / a->max_health;
+			value /= 2;
+			value += a->type;
+			value /= PT_max * 2;
+			value += (a->team == self->team) ? 1 : 0;			
 			write(a->pos.x,a->pos.y,value);
 		}
 		return single_frame;
