@@ -1,10 +1,13 @@
 #include "config.h"
 #include "single_frame.h"
 
-DEFINE_int32(experience_size, 500000, "experience_size");
+DEFINE_int32(experience_size, 100000, "experience_size");
 DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
-DEFINE_int32(learning_steps_total, 1000000, "learning_steps_total");
+DEFINE_int32(learning_steps_total, 500000, "learning_steps_total");
 DEFINE_int32(epsilon_min, 0.1, "epsilon_min");
+DEFINE_double(gamma, 0.95, "gamma");
+DEFINE_int32(display_interval, 1, "display_interval");
+DEFINE_int32(display_after, 10000, "display_after");
 
 typedef std::array<float,num_actions> net_input_type;
 typedef boost::shared_ptr<SingleFrame> SingleFrameSp;
@@ -369,9 +372,14 @@ public :
 	}
 	
 	DeepNetwork()
-	: gamma(0.95), trainer(*this), eval_for_prediction(*this), eval_for_train(*this), replay_memory(*this), feeder(*this)
+	: gamma(FLAGS_gamma), trainer(*this), eval_for_prediction(*this), eval_for_train(*this), replay_memory(*this), feeder(*this)
 	{		
 		net_init();
+	}
+
+	void load_trained(const std::string& model_bin)
+	{
+		net->CopyTrainedLayersFrom(model_bin);
 	}
 
 	void net_init()

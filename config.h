@@ -1,6 +1,6 @@
 // fix
 enum { temporal_window = 3 };	
-enum { sight_diameter = 32 };
+enum { sight_diameter = 64 };
 enum { world_size = sight_diameter / 2 };
 enum { num_states = sight_diameter * sight_diameter };
 enum { num_actions = 6 };

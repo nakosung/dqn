@@ -1,8 +1,5 @@
 auto ANSI = "\033[";
 
-DEFINE_int32(display_interval, 1, "display_interval");
-DEFINE_int32(display_after, 2000, "display_after");
-
 struct GameState
 {
 	std::array<int,2> scores;
@@ -10,7 +7,7 @@ struct GameState
 	int clock;
 
 	GameState() 
-	: epoch(0)
+	: epoch(0), clock(0)
 	{
 		std::fill(scores.begin(),scores.end(),0);
 	}
@@ -72,8 +69,7 @@ class World;
 class Actable;
 
 class Agent {
-public:
-	std::function<Agent*()> creator;
+public:	
 	World* world;
 	Vector pos;
 	bool pending_kill;
@@ -81,6 +77,8 @@ public:
 	Agent()
 	: world(world), pos(0,0), pending_kill(false)
 	{}
+
+	virtual bool is_friendly(int team) const { return false; }
 
 	virtual void check_sanity() const
 	{
@@ -117,9 +115,10 @@ public:
 	std::deque<std::string> events;
 	bool quit;	
 	int final_winner;
+	int world_clock;
 	
 	World(std::mt19937& random_engine, GameState& game_state) 
-	: random_engine(random_engine), size(world_size,world_size), game_state(game_state), quit(false), final_winner(-1)
+	: random_engine(random_engine), size(world_size,world_size), game_state(game_state), quit(false), final_winner(-1), world_clock(0)
 	{				
 	}
 
@@ -152,41 +151,48 @@ public:
 	Agent* spawn(std::function<Agent*(void)> l)
 	{
 		auto agent = l();
-		agent->world = this;
-		agent->creator = l;
+		agent->world = this;		
 		agents.push_back( shared_ptr<Agent>(agent) );
 
 		return agent;
 	}
 
+	int get_dominant_team() const
+	{
+		int powers[2] = {0,0};
+		for (auto a : agents)
+		{
+			for (int team=0; team<2; ++team)
+			{
+				if (a->is_friendly(team))
+				{
+					powers[team]++;
+				}
+			}				
+		}			
+
+		if (powers[0] > powers[1])
+		{
+			return 0;
+		}
+		else if (powers[0] < powers[1])
+		{
+			return 1;
+		}
+		else 
+		{
+			return -1;
+		}
+	}
+
 	void tick() 
 	{
 		game_state.clock++;
-
-		while (true)
-		{
-			bool clear_to_go = true;
-			for (auto a : agents)
-			{
-				if (a->pending_kill)
-				{
-					if (a->creator)
-					{
-						spawn(a->creator);
-					}
-					agents.remove(a);
-					clear_to_go = false;
-					if (agents.size() == 0)
-					{
-						quit = true;
-					}
-					break;
-				}
-			}
-			if (clear_to_go) break;
+		if (world_clock++ > 1000)
+		{		
+			game_over(get_dominant_team());
 		}
 		
-
 		for (auto a : agents)
 		{
 			a->forward();
@@ -236,9 +242,14 @@ public:
 		return true;
 	}
 
-	bool can_move_to(const Agent* a,const Vector& start, const Vector& end)
+	bool can_move_to(const Agent* a,const Vector& start, const Vector& end) const
 	{
-		return end.x >= 0 && end.y >= 0 && end.x < size.x && end.y < size.y && is_vacant(end);
+		return !is_solid(end) && end.x >= 0 && end.y >= 0 && end.x < size.x && end.y < size.y && is_vacant(end);
+	}
+
+	bool is_solid(const Vector& v) const
+	{
+		return abs(v.x - world_size/2) <= world_size / 4 && abs(v.y - world_size/2) <= 0;
 	}
 };
 
@@ -407,6 +418,10 @@ public:
 		{
 			dump();
 			std::cout << ANSI_ESCAPE::gotoxy(0,world.size.y+4);
+		}
+		else if (world.game_state.clock < FLAGS_display_after && world.game_state.clock % 1000 == 0)
+		{
+			std::cout << "clock:" << world.game_state.clock << "\n";			
 		}		
 	}	
 
@@ -436,6 +451,11 @@ public:
 
 			for (int x=0; x<world.size.x; ++x)
 			{
+				if (world.is_solid(Vector(x,y)))
+				{
+					line += "#";
+					continue;
+				}
 				bool found = false;
 				for (auto a : world.agents)
 				{
@@ -507,6 +527,8 @@ public :
 	float attack_reward, kill_reward;
 
 	std::string colorize(std::string in) const { return str(format("%s%dm%s%s0m")%ANSI%(team+44)%in%ANSI); }
+
+	virtual bool is_friendly(int team) const { return team == this->team; }
 
 	virtual std::string one_letter() { return colorize(str(format("%c")%code)); }
 	virtual std::string detail() { return colorize(str(format("%c[t:%d] hp:%d cd:%d %s")%code%team%health%cooldown%Base::detail())); }
@@ -693,11 +715,14 @@ public:
 			}			
 		};
 
-		for (int y=0; y<sight_diameter; ++y)
+		for (int y=0; y<world_size; ++y)
 		{
-			for (int x=0; x<sight_diameter; ++x)
+			for (int x=0; x<world_size; ++x)
 			{
-				write(x,y,-0.5f);
+				if (!agent->world->is_solid(Vector(x,y)))
+				{
+					write(x,y,-0.5f);
+				}				
 			}
 		}
 
