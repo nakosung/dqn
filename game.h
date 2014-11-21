@@ -3,6 +3,19 @@ auto ANSI = "\033[";
 DEFINE_int32(display_interval, 1, "display_interval");
 DEFINE_int32(display_after, 2000, "display_after");
 
+struct GameState
+{
+	std::array<int,2> scores;
+	int epoch;
+	int clock;
+
+	GameState() 
+	: epoch(0)
+	{
+		std::fill(scores.begin(),scores.end(),0);
+	}
+};
+
 bool is_valid_team( int team )
 {
 	return team == 0 or team == 1;
@@ -95,18 +108,18 @@ public:
 	}
 	bool should_display() const
 	{
-		return clock >= FLAGS_display_after && clock % FLAGS_display_interval == 0;
+		return game_state.clock >= FLAGS_display_after && game_state.clock % FLAGS_display_interval == 0;
 	}
 
 	Vector size;
 	std::list< shared_ptr<Agent> > agents;	
-	int& clock;
+	GameState& game_state;
 	std::deque<std::string> events;
 	bool quit;	
 	int final_winner;
 	
-	World(std::mt19937& random_engine, int& clock) 
-	: random_engine(random_engine), size(world_size,world_size), clock(clock), quit(false), final_winner(-1)
+	World(std::mt19937& random_engine, GameState& game_state) 
+	: random_engine(random_engine), size(world_size,world_size), game_state(game_state), quit(false), final_winner(-1)
 	{				
 	}
 
@@ -120,6 +133,11 @@ public:
 	void game_over(int winner)
 	{
 		final_winner = winner;
+
+		if (is_valid_team(winner))
+		{
+			game_state.scores[winner]++;
+		}			
 
 		for (auto a : agents)
 		{
@@ -143,7 +161,7 @@ public:
 
 	void tick() 
 	{
-		clock++;
+		game_state.clock++;
 
 		while (true)
 		{
@@ -227,6 +245,7 @@ public:
 class AgentBrain : public Brain
 {
 public:	
+	AgentBrain(NetworkSp network,World* world) : Brain(network), world(world) {}
 	World* world;
 	virtual int forward(Actable* agent ) = 0;	
 };
@@ -375,26 +394,15 @@ class Display
 public:
 	World& world;
 
-	bool needs_clear;
-	int& clock;
-	int epoch;
+	bool needs_clear;	
 
-	std::array<int,2>& scores;			
-
-	Display(World& world,int epoch,int& clock,std::array<int,2>& scores) 
-	: world(world), needs_clear(true), epoch(epoch), clock(clock), scores(scores)
+	Display(World& world) 
+	: world(world), needs_clear(true)
 	{
 	}	
 
 	void tick()
-	{
-		if (world.quit)
-		{			
-			if (is_valid_team(world.final_winner))
-			{
-				scores[world.final_winner] ++;
-			}			
-		}
+	{		
 		if (world.should_display())
 		{
 			dump();
@@ -417,8 +425,8 @@ public:
 		std::vector<std::string> newlines;
 		int y = 0;
 		auto logline = [&](std::string x) { newlines.push_back(x); };
-		logline(str(format("agents %3d clock %8d epoch %8d")%world.agents.size()%clock%epoch));
-		logline(str(format("score: %d : %d")%scores[0]%scores[1]));
+		logline(str(format("agents %3d clock %8d epoch %8d")%world.agents.size()%world.game_state.clock%world.game_state.epoch));
+		logline(str(format("score: %d : %d")%world.game_state.scores[0]%world.game_state.scores[1]));
 
 		// I know, it's too slow.. :)
 		std::string reset(str(format("%s40m")%ANSI));
@@ -655,6 +663,7 @@ public :
 class HeroBrain : public AgentBrain
 {
 public:
+	HeroBrain(NetworkSp network, World* world) : AgentBrain(network,world) {}
 	virtual int forward( Actable* agent )
 	{
 		// LOG(INFO) << "hero brain forward, calling super";

@@ -10,8 +10,8 @@ public:
 
 	bool has_pending_experience;
 
-	Brain()
-	: forward_passes(0), has_pending_experience(false)
+	Brain(NetworkSp network)
+	: forward_passes(0), has_pending_experience(false), network(network)
 	{}
 
 	void flush(SingleFrameSp next_frame)
@@ -24,8 +24,7 @@ public:
 				exit(-1);
 			}
 			current_experience.next_frame = next_frame;					
-			network->replay_memory.push(current_experience);				
-			network->train();
+			network->replay_memory.push(current_experience);							
 
 			has_pending_experience = false;
 		}

@@ -40,35 +40,25 @@ int main(int argc, char** argv)
 	
 	Caffe::set_phase(Caffe::TRAIN);
 
-	boost::shared_ptr<DeepNetwork> hero_net(new DeepNetwork);	
-	boost::shared_ptr<DeepNetwork> minion_net(new DeepNetwork);
-	
-	typedef boost::shared_ptr<AgentBrain> BrainSp;
-	std::array<int,2> scores;
-	std::fill(scores.begin(),scores.end(),0);
-	enum { num_teams = 2 };
-	enum { minions_per_team = 3 };
-	enum { num_heroes = 2 };
-	enum { num_minions = num_teams * minions_per_team };
+	GameState game_state;
 
-	auto gen_brains = [&](int num_brains, boost::shared_ptr<DeepNetwork> net, std::function<AgentBrain*()> gen) {
-		std::vector<BrainSp> hero_brains(num_brains);
-		std::generate(hero_brains.begin(),hero_brains.end(),[&] { 
-			auto brain = BrainSp(gen());
-			brain->network = net;
-			return brain;
-		});
-		return hero_brains;
+	boost::shared_ptr<DeepNetwork> hero_net(new DeepNetwork);	
+	boost::shared_ptr<DeepNetwork> minion_net(new DeepNetwork);	
+
+	std::vector<boost::shared_ptr<DeepNetwork>> nets;
+	nets.push_back(hero_net);
+
+	auto train_nets = [&]{
+		for (auto n : nets)
+		{
+			n->train();
+		}
 	};
 	
-	auto hero_brains = gen_brains(num_heroes,hero_net,[=]{return new HeroBrain;});
-	auto minion_brains = gen_brains(num_minions,hero_net,[=]{return new HeroBrain;});	
-
-	int epoch = 0;
-	for (int iter = 0; iter<FLAGS_iterations;epoch++)
+	for (; game_state.clock<FLAGS_iterations;game_state.epoch++)
 	{
-		World w(random_engine,iter);	
-		Display disp(w,epoch,iter,scores);		
+		World w(random_engine,game_state);	
+		Display disp(w);		
 
 		auto pos_gen = [&](std::function<Vector()> gen)
 		{
@@ -84,43 +74,26 @@ int main(int argc, char** argv)
 
 		auto x_dist = std::uniform_int_distribution<>(0,w.size.x-1);
 
-		int minion_id = 0;
+		auto hero = [&](int team){return static_cast<Agent*>(new Hero(team));};
+		auto minion = [&](int team){return static_cast<Agent*>(new Minion(team));};
 
-		auto spawn_hero = [&](int team){
-			Vector pos = pos_gen([&]{return Vector(x_dist(random_engine),team * (w.size.y - 1));});		
-			auto brain = hero_brains[team];
-			brain->world = &w;
-			return w.spawn([=]{
-				auto m = new Hero(team);				
-				m->brain = brain;				
-				m->pos = pos;
-				return m;
-			});			
-		};	
-		auto spawn_minion = [&](int team){
-			Vector pos = pos_gen([&]{return Vector(x_dist(random_engine),team * (w.size.y - 1));});		
-			auto brain = minion_brains[minion_id++];
-			brain->world = &w;
-			assert(brain.get()!=nullptr);
-			return w.spawn([=]{
-				auto m = new Minion(team);
-				m->brain = brain;
-				m->pos = pos;
-				return m;
-			});			
-		};	
-		spawn_minion(0);
-		spawn_minion(0);
-		spawn_minion(0);
-		spawn_minion(1);
-		spawn_minion(1);
-		spawn_minion(1);	
-		spawn_hero(0);
-		spawn_hero(1);
+		auto spawn = [&](int team,std::function<Agent*(int team)> gen){
+			auto pawn = w.spawn([&]{return gen(team);});
+			static_cast<Pawn*>(pawn)->brain.reset(new HeroBrain(hero_net,&w));
+			pawn->pos = pos_gen([&]{return Vector(x_dist(random_engine),team * (w.size.y - 1));});				
+		};			
+
+		spawn(0,minion);
+		spawn(0,minion);
+		spawn(1,minion);
+		spawn(1,minion);
+		spawn(0,hero);
+		spawn(1,hero);		
 
 		while (!w.quit)
 		{
 			w.tick();
+			train_nets();
 			disp.tick();
 		}	
 	}	

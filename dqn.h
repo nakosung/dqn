@@ -1,9 +1,9 @@
 #include "config.h"
 #include "single_frame.h"
 
-DEFINE_int32(experience_size, 30000, "experience_size");
+DEFINE_int32(experience_size, 500000, "experience_size");
 DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
-DEFINE_int32(learning_steps_total, 200000, "learning_steps_total");
+DEFINE_int32(learning_steps_total, 1000000, "learning_steps_total");
 DEFINE_int32(epsilon_min, 0.1, "epsilon_min");
 
 typedef std::array<float,num_actions> net_input_type;
