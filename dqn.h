@@ -395,7 +395,7 @@ public :
 		LOG(INFO) << FLAGS_solver;
 		caffe::ReadProtoFromTextFileOrDie(FLAGS_solver, &solver_param);
 		
-		solver.reset(new caffe::SGDSolver<float>(solver_param));
+		solver.reset(caffe::GetSolver<float>(solver_param));
 		net = solver->net();
 		q_values_blob = net->blob_by_name("q_values");
 	}
