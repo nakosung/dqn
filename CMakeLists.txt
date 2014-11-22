@@ -19,6 +19,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -O3 -march=native")
 target_link_libraries(dqn caffe)
 target_link_libraries(dqn glog)
 target_link_libraries(dqn gflags)
+target_link_libraries(dqn protobuf)
 
 if(NOT CPU_ONLY)
   include_directories(/usr/local/cuda-6.5/targets/x86_64-linux/include)

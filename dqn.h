@@ -1,5 +1,9 @@
 #include "config.h"
 #include "single_frame.h"
+#include "google/protobuf/text_format.h"
+#include "caffe/proto/caffe.pb.h"
+#include <fstream>
+#include <streambuf>
 
 DEFINE_int32(experience_size, 100000, "experience_size");
 DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
@@ -391,11 +395,26 @@ public :
 
 	void net_create()
 	{
-		caffe::SolverParameter solver_param;
+		caffe::SolverParameter param;
 		LOG(INFO) << FLAGS_solver;
-		caffe::ReadProtoFromTextFileOrDie(FLAGS_solver, &solver_param);
+		// caffe::ReadProtoFromTextFileOrDie(FLAGS_solver, &param);
+
+		std::ifstream t(FLAGS_solver);
+		std::string proto((std::istreambuf_iterator<char>(t)),std::istreambuf_iterator<char>());
+
+		CHECK(google::protobuf::TextFormat::ParseFromString(proto, &param));
+		switch (Caffe::mode()) {
+		case Caffe::CPU:
+			param.set_solver_mode(caffe::SolverParameter_SolverMode_CPU);
+			break;
+		case Caffe::GPU:
+			param.set_solver_mode(caffe::SolverParameter_SolverMode_GPU);
+			break;
+		default:
+			LOG(FATAL) << "Unknown Caffe mode: " << Caffe::mode();
+		}
 		
-		solver.reset(caffe::GetSolver<float>(solver_param));
+		solver.reset(caffe::GetSolver<float>(param));
 		net = solver->net();
 		q_values_blob = net->blob_by_name("q_values");
 	}
