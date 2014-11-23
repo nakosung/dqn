@@ -4,6 +4,7 @@
 #include "caffe/proto/caffe.pb.h"
 #include <fstream>
 #include <streambuf>
+#include <unordered_map>
 
 DEFINE_int32(experience_size, 100000, "experience_size");
 DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
@@ -21,6 +22,34 @@ bool is_valid_action(int action) { return action >= 0 && action < num_actions; }
 bool is_valid_reward(float reward) { return reward >= -1.0 && reward <= 1.0; }
 bool is_valid_epsilon(float eps) { return eps >= 0.0 && eps <= 1.0; }
 bool is_valid_q(float val) { return !std::isnan(val); }
+
+void replace_proto(std::string& proto)
+{
+	std::unordered_map<std::string, std::string> dictionary;
+
+	auto dict_add_int = [&](std::string key, int value) {
+		dictionary[key] = str(format("%d")%value);
+	};
+
+	dict_add_int("BATCH_SIZE",MinibatchSize);
+	dict_add_int("NUM_ACTIONS",num_actions);
+	dict_add_int("SIGHT_SIZE",sight_diameter);
+	dict_add_int("TEMPORAL_WINDOW_PLUS_1",temporal_window + 1);
+
+	for (;;)
+	{
+		auto found = proto.find("{{");
+		if (found == std::string::npos) break;
+
+		auto closing = proto.find("}}");
+		if (closing == std::string::npos) break;
+
+		if (found > closing) break;
+
+		auto key = proto.substr(found+2,closing-found-2);
+		proto = proto.replace(found,closing-found+2,dictionary[key]);
+	}
+}
 
 struct Experience
 {
@@ -401,8 +430,11 @@ public :
 
 		std::ifstream t(FLAGS_solver);
 		std::string proto((std::istreambuf_iterator<char>(t)),std::istreambuf_iterator<char>());
+		
+		replace_proto(proto);
 
 		CHECK(google::protobuf::TextFormat::ParseFromString(proto, &param));
+
 		switch (Caffe::mode()) {
 		case Caffe::CPU:
 			param.set_solver_mode(caffe::SolverParameter_SolverMode_CPU);

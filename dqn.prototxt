@@ -13,10 +13,10 @@ net_param {
 	  top: "frames"
 	  top: "dummy1"
 	  memory_data_param {
-	    batch_size: 32
-	    channels: 4
-	    height: 64
-	    width: 64
+	    batch_size: {{BATCH_SIZE}}
+	    channels: {{TEMPORAL_WINDOW_PLUS_1}}
+	    height: {{SIGHT_SIZE}}
+	    width: {{SIGHT_SIZE}}
 	  }
 	}
 	layers {
@@ -25,8 +25,8 @@ net_param {
 	  top: "target"
 	  top: "dummy2"
 	  memory_data_param {
-	    batch_size: 32
-	    channels: 6
+	    batch_size: {{BATCH_SIZE}}
+	    channels: {{NUM_ACTIONS}}
 	    height: 1
 	    width: 1
 	  }
@@ -37,8 +37,8 @@ net_param {
 	  top: "filter"
 	  top: "dummy3"
 	  memory_data_param {
-	    batch_size: 32
-	    channels: 6
+	    batch_size: {{BATCH_SIZE}}
+	    channels: {{NUM_ACTIONS}}
 	    height: 1
 	    width: 1
 	  }
@@ -126,7 +126,7 @@ net_param {
 	  bottom: "ip1"
 	  top: "q_values"
 	  inner_product_param {
-	    num_output: 6
+	    num_output: {{NUM_ACTIONS}}
 	    weight_filler {
 	      type: "gaussian"
 	      std: 0.01
