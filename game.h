@@ -97,6 +97,23 @@ public:
 	virtual std::string one_letter() { return "*"; }
 };
 
+struct Event
+{
+	enum EventType
+	{
+		event_attack,
+		event_takedamage,
+		event_die
+	};
+	
+	EventType type;
+	Vector location;
+
+	Event() {}
+	Event(EventType type, const Vector& location) : type(type), location(location)
+	{}
+};
+
 class World {
 public:
 	std::mt19937& random_engine;
@@ -111,23 +128,21 @@ public:
 
 	Vector size;
 	std::list< shared_ptr<Agent> > agents;	
-	GameState& game_state;
-	std::deque<std::string> events;
+	GameState& game_state;	
 	bool quit;	
 	int final_winner;
 	int world_clock;
+	std::vector<Event> events;
 	
 	World(std::mt19937& random_engine, GameState& game_state) 
 	: random_engine(random_engine), size(world_size,world_size), game_state(game_state), quit(false), final_winner(-1), world_clock(0)
 	{				
 	}
 
-	void log_event(std::string s)
+	void add_event(const Event& event)
 	{
-		events.push_back(s);
-		if (events.size() > 10)
-			events.pop_front();
-	}
+		events.push_back(event);
+	}	
 
 	void game_over(int winner)
 	{
@@ -187,6 +202,8 @@ public:
 
 	void tick() 
 	{
+		events.empty();
+
 		game_state.clock++;
 		if (world_clock++ > 1000)
 		{		
@@ -209,7 +226,7 @@ public:
 			a->backward();
 		}				
 
-		collect_garbage();
+		collect_garbage();		
 	}
 
 	void collect_garbage()
@@ -249,6 +266,7 @@ public:
 
 	bool is_solid(const Vector& v) const
 	{
+		return false;
 		return abs(v.x - world_size/2) <= world_size / 4 && abs(v.y - world_size/2) <= 0;
 	}
 };
@@ -318,7 +336,7 @@ public:
 
 		if (brain)
 		{
-			//reward *= 0.1f;			
+			reward *= 0.1f;			
 			brain->backward(std::min(1.0f,std::max(-1.0f,reward)));
 
 			acc_reward = acc_reward * brain->network->trainer.gamma + reward;
@@ -480,11 +498,7 @@ public:
 		for (auto a : world.agents)
 		{
 			logline(a->detail());
-		}
-		for (auto a : world.events)
-		{
-			logline(a);
-		}
+		}		
 
 		for (int line=0; line<lines.size(); ++line)
 		{
@@ -532,7 +546,7 @@ public :
 	virtual bool is_friendly(int team) const { return team == this->team; }
 
 	virtual std::string one_letter() { return colorize(str(format("%c")%code)); }
-	virtual std::string detail() { return colorize(str(format("%c[t:%d] hp:%d cd:%d %s")%code%team%health%cooldown%Base::detail())); }
+	virtual std::string detail() { return colorize(str(format("%c[%d] hp:%d %s")%code%team%health%Base::detail())); }
 
 	Pawn(PawnType type, int team,int in_max_cooldown,int in_max_health, char code, int range, float attack_reward, float kill_reward)
 	: type(type), max_health(in_max_health), max_cooldown(in_max_cooldown), team(team), health(in_max_health), cooldown(0), code(code), death_timer(0), range(range), attack_reward(attack_reward), kill_reward(kill_reward)
@@ -606,12 +620,15 @@ public :
 		if (attacker && !attacker->pending_kill)
 		{
 			attacker->reward += attack_reward;
+			world->add_event(Event(Event::event_takedamage,pos));	
+			world->add_event(Event(Event::event_attack,attacker->pos));	
 		}
 
 		// reward -= 1.0f;
 
 		if (health <= 0)
 		{		
+			world->add_event(Event(Event::event_die,pos));	
 			health = 0;	
 			die(attacker);
 		}
@@ -701,18 +718,21 @@ public:
 	{		
 		SingleFrameSp single_frame(new SingleFrame);
 
-		auto& image = single_frame->image;
+		auto& images = single_frame->images;
 
-		std::fill(image.begin(),image.end(),-1);
+		for (auto& image : images)
+		{
+			std::fill(image.begin(),image.end(),0);
+		}		
 
 		Pawn* self = dynamic_cast<Pawn*>(agent);
 
-		auto write = [&](int x, int y, float val)
+		auto write = [&](int ch, int x, int y, float val)
 		{
 			Vector v(x - self->pos.x + sight_diameter/2,y - self->pos.y + sight_diameter/2);
 			if (v.x >= 0 && v.y >= 0 && v.x < sight_diameter && v.y < sight_diameter)
 			{
-				image[v.x + v.y * world_size] = val;
+				images[ch][v.x + v.y * world_size] = val;
 			}			
 		};
 
@@ -720,10 +740,14 @@ public:
 		{
 			for (int x=0; x<world_size; ++x)
 			{
-				if (!agent->world->is_solid(Vector(x,y)))
+				if (agent->world->is_solid(Vector(x,y)))
 				{
-					write(x,y,-0.5f);
+					write(0,x,y,-2);
 				}				
+				else
+				{
+					write(0,x,y,-1);
+				}
 			}
 		}
 
@@ -731,14 +755,22 @@ public:
 		{
 			Pawn* a = dynamic_cast<Pawn*>(other.get());
 			if (a == nullptr) continue;
-
-			float value = a->health / a->max_health;
-			value /= 2;
-			value += a->type;
-			value /= PT_max * 2;
-			value += (a->team == self->team) ? 1 : 0;			
-			write(a->pos.x,a->pos.y,value);
+									
+			write(0,a->pos.x,a->pos.y,a->type);
+			write(1,a->pos.x,a->pos.y,(float)a->health / a->max_health);
+			write(2,a->pos.x,a->pos.y,(a->team == self->team) ? 1 : -1);			
 		}
+
+		for (const auto& e : agent->world->events)
+		{
+			write(3,e.location.x,e.location.y,e.type + 1);
+		}
+
+		auto& stats = single_frame->stats;
+		stats[0] = world->game_state.clock / 1000.0f;
+		stats[1] = (float)self->health / self->max_health;
+		stats[2] = (float)self->cooldown / self->max_cooldown;
+		stats[3] = self->type;
 		return single_frame;
 	}
 };

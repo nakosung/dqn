@@ -14,9 +14,9 @@ using boost::str;
 using boost::format;
 
 DEFINE_bool(gpu, false, "Use GPU to brew Caffe");
-DEFINE_int32(iterations,20000000, "iterations");
-DEFINE_string(solver, "dqn.prototxt",  "The solver definition protocol buffer text file.");
-DEFINE_string(model, "hero_net.bin", "trained model filename");
+DEFINE_int32(iterations,200000, "iterations");
+DEFINE_string(solver, "dqn_solver.prototxt",  "The solver definition protocol buffer text file.");
+DEFINE_string(model, "", "trained model filename");
 
 #include "dqn.h"
 #include "game.h"
@@ -57,8 +57,7 @@ int main(int argc, char** argv)
 	std::mt19937 random_engine;
 
 	caffe::GlobalInit(&argc,&argv);
-	// google::InitGoogleLogging(argv[0]);
-  	// google::InstallFailureSignalHandler();
+	// google::InstallFailureSignalHandler();
  	// google::LogToStderr();
 
 	if (FLAGS_gpu)
@@ -74,22 +73,35 @@ int main(int argc, char** argv)
 
 	GameState game_state;
 
-	Environment env;
+	Environment env(random_engine);
 
-	boost::shared_ptr<DeepNetwork> hero_net(new DeepNetwork(env));	
-	boost::shared_ptr<DeepNetwork> minion_net(new DeepNetwork(env));	
-
+	boost::shared_ptr<DeepNetwork> dqn(new DeepNetwork(env,FLAGS_solver));	
+	boost::shared_ptr<DeepNetwork> dqn_trained(new DeepNetwork(env,FLAGS_solver));	
+	if (FLAGS_model != "")
+	{
+		dqn_trained->loader.load_trained(FLAGS_model);
+	}
+	else
+	{
+		dqn_trained = dqn;
+	}
+	
+	
 	std::vector<boost::shared_ptr<DeepNetwork>> nets;
-	nets.push_back(hero_net);
+	nets.push_back(dqn);
 
 	auto train_nets = [&]{
 		for (auto n : nets)
 		{
-			n->train();
+			if (n->epsilon.is_learning)
+			{
+				n->train();				
+			}
 		}
 	};
-	
-	for (; game_state.clock<FLAGS_iterations;game_state.epoch++)
+
+	bool quit = false;	
+	for (;!quit;game_state.epoch++)
 	{
 		World w(random_engine,game_state);	
 		Display disp(w);		
@@ -113,7 +125,7 @@ int main(int argc, char** argv)
 
 		auto spawn = [&](int team,std::function<Agent*(int team)> gen){
 			auto pawn = w.spawn([&]{return gen(team);});
-			static_cast<Pawn*>(pawn)->brain.reset(new HeroBrain(hero_net,&w));
+			static_cast<Pawn*>(pawn)->brain.reset(new HeroBrain(team == 0 ? dqn : dqn_trained,&w));
 			pawn->pos = pos_gen([&]{return Vector(x_dist(random_engine),team * (w.size.y - 1));});				
 		};			
 
@@ -124,8 +136,25 @@ int main(int argc, char** argv)
 		spawn(0,hero);
 		spawn(1,hero);		
 
-		while (!w.quit)
+		while (!w.quit && !quit)
 		{
+			if (kbhit())
+			{
+				switch (auto ch = getchar())
+				{
+				case 27 : 
+					quit = true;
+					break;
+				case '1' :
+				case '2' :
+				case '3' : 
+				case '4' :
+				case '5' :
+				case '6' :
+					FLAGS_display_interval = 1 << (ch - '1');
+					break;				
+				}
+			}
 			w.tick();
 			train_nets();
 			disp.tick();

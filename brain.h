@@ -41,9 +41,9 @@ public:
 		
 		flush(frame);
 
-		if (forward_passes > temporal_window + 1 && network->epsilon.is_learning)
+		if (forward_passes > temporal_window + 1)
 		{
-			has_pending_experience = true;
+			has_pending_experience = network->epsilon.is_learning;
 			std::copy(frame_window.begin(), frame_window.end(), current_experience.input_frames.begin());
 			auto p = network->predict(current_experience.input_frames,random_action,is_valid_action);
 			last_p = p;

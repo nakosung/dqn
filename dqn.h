@@ -11,13 +11,13 @@ DEFINE_int32(experience_size, 100000, "experience_size");
 DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
 DEFINE_int32(learning_steps_total, 500000, "learning_steps_total");
 DEFINE_int32(epsilon_min, 0.1, "epsilon_min");
-DEFINE_double(gamma, 0.98, "gamma");
+DEFINE_double(gamma, 0.95, "gamma");
 DEFINE_int32(display_interval, 1, "display_interval");
 DEFINE_int32(display_after, 10000, "display_after");
 
 typedef std::array<float,num_actions> net_input_type;
 typedef boost::shared_ptr<SingleFrame> SingleFrameSp;
-typedef std::array<SingleFrameSp,temporal_window+1> InputFrames;
+typedef std::array<SingleFrameSp,window_length> InputFrames;
 
 bool is_valid_action(int action) { return action >= 0 && action < num_actions; }
 bool is_valid_reward(float reward) { return reward >= -1.0 && reward <= 1.0; }
@@ -101,6 +101,7 @@ public :
 	Environment& env;
 
 	typedef std::array<float,MinibatchSize * InputDataSize> FramesLayerInputData;
+	typedef std::array<float,MinibatchSize * StatChannels> StatsLayerInputData;
 	typedef std::array<float,MinibatchSize * OutputCount> TargetLayerInputData;
 	typedef std::array<float,MinibatchSize * OutputCount> FilterLayerInputData;
 
@@ -160,6 +161,7 @@ public :
 		typedef shared_ptr<caffe::MemoryDataLayer<float>> MemoryDataLayerSp;
 
 		MemoryDataLayerSp frames_input_layer;
+		MemoryDataLayerSp stats_input_layer;
 		MemoryDataLayerSp target_input_layer;
 		MemoryDataLayerSp filter_input_layer;
 		TargetLayerInputData dummy_input_data;
@@ -168,6 +170,7 @@ public :
 		{
 		public:
 			FramesLayerInputData frames_input;
+			StatsLayerInputData stats_input;
 	  		TargetLayerInputData target_input;	  		
 	  		FilterLayerInputData filter_input;
 	  		Feeder& feeder;
@@ -176,12 +179,14 @@ public :
 			{}
 
 			FramesLayerInputData::iterator frames;
+			StatsLayerInputData::iterator stats;
 			TargetLayerInputData::iterator target;
 			FilterLayerInputData::iterator filter;
 
 			void begin()
 			{
 				frames = frames_input.begin();
+				stats = stats_input.begin();
 				target = target_input.begin();
 				filter = filter_input.begin();
 
@@ -192,7 +197,29 @@ public :
 			template <typename U>
 			void write_frames(const U& input_frames)
 			{				
-				SingleFrame::fill_frames(frames,input_frames);				
+				auto target = frames;
+				auto target_stats = stats;
+				for (const auto& f : input_frames)
+				{	
+					auto frame = f.get();
+					if (frame)
+					{
+						for (const auto& image : frame->images)
+						{
+							std::copy(image.begin(),image.end(),target);
+							assert(image.size() == sight_area);
+							target += sight_area;
+						}						
+
+						std::copy(frame->stats.begin(), frame->stats.end(), target_stats);
+					}
+					else
+					{
+						std::fill(target, target + ImageSize,0);
+						target += ImageSize;
+					}										
+					target_stats += num_stats;
+				}
 			}
 
 			void write_target(int action, float r)
@@ -203,15 +230,18 @@ public :
 
 			void advance()
 			{
+				frames += InputDataSize;
+				stats += StatChannels;
 				target += OutputCount;
 				filter += OutputCount;
 			}
 
 			void done()
 			{
-				std::fill(frames, frames_input.end(), 0);									
+				std::fill(frames, frames_input.end(), 0);
+				std::fill(stats, stats_input.end(), 0);
 				
-				feeder.input(frames_input,target_input,filter_input);
+				feeder.input(frames_input,stats_input,target_input,filter_input);
 			}
 		};		
 
@@ -229,18 +259,13 @@ public :
 			std::fill(dummy_input_data.begin(),dummy_input_data.end(),0.0);
 		}
 
-		void input( const FramesLayerInputData& frames, const TargetLayerInputData& target, const FilterLayerInputData& filter )
+		void input( const FramesLayerInputData& frames, const StatsLayerInputData& stats, const TargetLayerInputData& target, const FilterLayerInputData& filter )
 		{
 			frames_input_layer->Reset(const_cast<float*>(frames.data()),dummy_input_data.data(),MinibatchSize);
+			stats_input_layer->Reset(const_cast<float*>(stats.data()),dummy_input_data.data(),MinibatchSize);
 			target_input_layer->Reset(const_cast<float*>(target.data()),dummy_input_data.data(),MinibatchSize);
 			filter_input_layer->Reset(const_cast<float*>(filter.data()),dummy_input_data.data(),MinibatchSize);
-		}
-
-		void input( const FramesLayerInputData& frames )
-		{
-			input( frames, dummy_input_data, dummy_input_data );
-			net.net->ForwardPrefilled(nullptr);
-		}
+		}		
 
 		void forward()
 		{
@@ -256,6 +281,7 @@ public :
 			};		
 
 			frames_input_layer = get_layer("frames_input_layer");		
+			stats_input_layer = get_layer("stats_input_layer");		
 			target_input_layer = get_layer("target_input_layer");
 			filter_input_layer = get_layer("filter_input_layer");
 		}
@@ -271,7 +297,8 @@ public :
 				assert(blob->width() == w);
 			};
 
-			check_blob_size("frames",MinibatchSize,temporal_window+1,sight_diameter,sight_diameter);
+			check_blob_size("frames",MinibatchSize,ImageChannels,sight_diameter,sight_diameter);
+			check_blob_size("stats",MinibatchSize,StatChannels,1,1);
 			check_blob_size("target",MinibatchSize,num_actions,1,1);
 			check_blob_size("filter",MinibatchSize,num_actions,1,1);
 		}
@@ -421,14 +448,7 @@ public :
 
 			cursor.done();
 
-			net.solver->Step(1);
-
-			std::cout << loss();
-		}
-
-		float loss() const
-		{
-			return loss_blob->data_at(0,0,0,0);			
+			net.solver->Step(1);			
 		}
 	};
 
@@ -437,20 +457,23 @@ public :
 	public :
 		DeepNetwork& net;
 
-		Loader(DeepNetwork& net) : net(net) 
+		Loader(DeepNetwork& net, std::string file) : net(net)
 		{
-			init();
-		}		
+			init(file);						
+		}
+
+		std::string read_text(std::string file)
+		{
+			std::ifstream t(file);
+			return std::string((std::istreambuf_iterator<char>(t)),std::istreambuf_iterator<char>());
+		}
 		
-		void init()
+		void init(std::string file)
 		{
 			caffe::SolverParameter param;
 			LOG(INFO) << FLAGS_solver;
-			// caffe::ReadProtoFromTextFileOrDie(FLAGS_solver, &param);
-
-			std::ifstream t(FLAGS_solver);
-			std::string proto((std::istreambuf_iterator<char>(t)),std::istreambuf_iterator<char>());
 			
+			std::string proto = read_text(file);			
 			replace_proto(proto);
 
 			CHECK(google::protobuf::TextFormat::ParseFromString(proto, &param));
@@ -473,6 +496,8 @@ public :
 		void load_trained(const std::string& model_bin)
 		{
 			net.net->CopyTrainedLayersFrom(model_bin);
+			net.epsilon.is_learning = false;
+			net.solver.reset();
 		}
 
 	private:
@@ -485,9 +510,17 @@ public :
 			};
 
 			dict_add_int("BATCH_SIZE",MinibatchSize);
+			dict_add_int("HIDDEN_LAYER_SIZE",HiddenLayerSize);
+			dict_add_int("IMAGE_FEATURE_SIZE",ImageFeatureSize);
+			dict_add_int("LOWLEVEL_IMAGE_FEATURE_SIZE",LowLevelImageFeatureSize);
 			dict_add_int("NUM_ACTIONS",num_actions);
 			dict_add_int("SIGHT_SIZE",sight_diameter);
-			dict_add_int("TEMPORAL_WINDOW_PLUS_1",temporal_window + 1);
+			dict_add_int("IMAGE_CHANNELS",ImageChannels);
+			dict_add_int("STAT_CHANNELS",StatChannels);
+			dict_add_int("LOWLEVEL_KERNEL_SIZE",LowLevelKernelSize);
+			dict_add_int("LOWLEVEL_KERNEL_STRIDE",LowLevelKernelSize / 2);
+			dict_add_int("KERNEL_SIZE",KernelSize);
+			dict_add_int("KERNEL_STRIDE",KernelSize / 2);
 
 			for (;;)
 			{
@@ -530,8 +563,8 @@ public :
 	Evaluator<MinibatchSize> eval_for_train;
 	Trainer trainer;
 	
-	DeepNetwork(Environment& env)
-	: epsilon(env), env(env), loader(*this), trainer(*this), eval_for_prediction(*this), eval_for_train(*this), feeder(*this)
+	DeepNetwork(Environment& env,std::string file)
+	: env(env), loader(*this,file), epsilon(env), trainer(*this), eval_for_prediction(*this), eval_for_train(*this), feeder(*this)
 	{}		
 
 	Policy predict(const InputFrames& input_frames,RandomActionFunctionType random_action,IsValidActionFunctionType is_valid_action)
