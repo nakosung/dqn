@@ -1,3 +1,4 @@
+#include "environment.h"
 #include "config.h"
 #include "single_frame.h"
 #include "google/protobuf/text_format.h"
@@ -22,34 +23,6 @@ bool is_valid_action(int action) { return action >= 0 && action < num_actions; }
 bool is_valid_reward(float reward) { return reward >= -1.0 && reward <= 1.0; }
 bool is_valid_epsilon(float eps) { return eps >= 0.0 && eps <= 1.0; }
 bool is_valid_q(float val) { return !std::isnan(val); }
-
-void replace_proto(std::string& proto)
-{
-	std::unordered_map<std::string, std::string> dictionary;
-
-	auto dict_add_int = [&](std::string key, int value) {
-		dictionary[key] = str(format("%d")%value);
-	};
-
-	dict_add_int("BATCH_SIZE",MinibatchSize);
-	dict_add_int("NUM_ACTIONS",num_actions);
-	dict_add_int("SIGHT_SIZE",sight_diameter);
-	dict_add_int("TEMPORAL_WINDOW_PLUS_1",temporal_window + 1);
-
-	for (;;)
-	{
-		auto found = proto.find("{{");
-		if (found == std::string::npos) break;
-
-		auto closing = proto.find("}}");
-		if (closing == std::string::npos) break;
-
-		if (found > closing) break;
-
-		auto key = proto.substr(found+2,closing-found-2);
-		proto = proto.replace(found,closing-found+2,dictionary[key]);
-	}
-}
 
 struct Experience
 {
@@ -87,14 +60,14 @@ struct Policy
 class AnnealedEpsilon
 {
 public:
+	Environment& env;
 	float epsilon, epsilon_min, epsilon_test_time;
 	int age;
 	bool is_learning;
-	int learning_steps_total, learning_steps_burnin;
-	mutable std::mt19937 random_engine;
+	int learning_steps_total, learning_steps_burnin;	
 
-	AnnealedEpsilon()
-	: is_learning(true), age(0), epsilon_min(FLAGS_epsilon_min), learning_steps_burnin(FLAGS_learning_steps_burnin < 0 ? FLAGS_learning_steps_total / 10 : FLAGS_learning_steps_burnin), learning_steps_total(FLAGS_learning_steps_total), epsilon_test_time(0.1)
+	AnnealedEpsilon(Environment& env)
+	: env(env), is_learning(true), age(0), epsilon_min(FLAGS_epsilon_min), learning_steps_burnin(FLAGS_learning_steps_burnin < 0 ? FLAGS_learning_steps_total / 10 : FLAGS_learning_steps_burnin), learning_steps_total(FLAGS_learning_steps_total), epsilon_test_time(0.1)
 	{}
 
 	float get() const
@@ -111,10 +84,9 @@ public:
 
 	bool should_do_random_action() const
 	{
-		const float dice = std::uniform_real_distribution<float>(0,1)(random_engine);		
 		const float eps = get();
 		assert(is_valid_epsilon(eps));
-		return dice < eps;
+		return env.test_prob(eps);
 	}
 
 	void operator ++()
@@ -126,9 +98,18 @@ public:
 class DeepNetwork
 {
 public :
+	Environment& env;
+
 	typedef std::array<float,MinibatchSize * InputDataSize> FramesLayerInputData;
 	typedef std::array<float,MinibatchSize * OutputCount> TargetLayerInputData;
 	typedef std::array<float,MinibatchSize * OutputCount> FilterLayerInputData;
+
+	typedef std::function<bool(int)> IsValidActionFunctionType;
+	typedef std::function<int()> RandomActionFunctionType;
+
+	typedef shared_ptr<caffe::Blob<float>> BlobSp;
+	typedef shared_ptr<caffe::Net<float>> NetSp;
+	typedef shared_ptr<caffe::Solver<float>> SolverSp;
 
 	class ReplayMemory
 	{
@@ -141,20 +122,18 @@ public :
 			experiences.reserve(size);
 		}
 
-		bool has_enough() const
+		bool has_more_than( size_t num_experiences ) const
 		{
-			return experiences.size() > net.epsilon.learning_steps_burnin;
+			return experiences.size() > num_experiences;
 		}
 
 		const Experience& get_random() const
 		{
-			return experiences[ net.randint(experiences.size()) ];
+			return experiences[ net.env.randint(experiences.size()) ];
 		}
 
 		void push(const Experience& e)
 		{
-			++net.epsilon;
-
 			Experience* out;
 
 			// being slow for limited time frames
@@ -164,7 +143,7 @@ public :
 			}
 			else
 			{
-				experiences[net.randint(size)] = e;
+				experiences[net.env.randint(size)] = e;
 			}
 		}
 
@@ -187,7 +166,8 @@ public :
 
 		Feeder(DeepNetwork& net)
 		: net(net)
-		{			
+		{		
+			init();
 		}
 
 		void init()
@@ -208,6 +188,7 @@ public :
 		void input( const FramesLayerInputData& frames )
 		{
 			input( frames, dummy_input_data, dummy_input_data );
+			net.net->ForwardPrefilled(nullptr);
 		}
 
 		void cache_layers()
@@ -247,10 +228,20 @@ public :
 		static_assert(N <= MinibatchSize, "Invalid use of evalutor");
 
 		DeepNetwork& net;
-		Evaluator(DeepNetwork& net) : net(net) {}
+		BlobSp q_values_blob;
+
+		Evaluator(DeepNetwork& net) : net(net) 
+		{
+			init();
+		}
+
+		void init()
+		{
+			q_values_blob = net.net->blob_by_name("q_values");			
+		}
 
 		std::array<Policy,N> policies;
-		std::array<Policy,N>& evaluate(const std::array<InputFrames,N>& input_frames_batch,std::function<bool(int)> is_valid_action)
+		std::array<Policy,N>& evaluate(const std::array<InputFrames,N>& input_frames_batch,IsValidActionFunctionType is_valid_action)
 		{			
 			FramesLayerInputData frames_input;
 			auto target = frames_input.begin();
@@ -264,18 +255,17 @@ public :
 				target += InputDataSize;
 			}
 	  
-			net.feeder.input(frames_input);
-			net.net->ForwardPrefilled(nullptr);
+			net.feeder.input(frames_input);			
 
 			int index = 0;
 			std::generate(policies.begin(), policies.end(), [&](){ return get_policy(index++,is_valid_action); });
 			return policies;
 		}
 
-		Policy get_policy(int index,std::function<bool(int)> is_valid_action)
+		Policy get_policy(int index, IsValidActionFunctionType is_valid_action)
 		{
 			auto q_at = [&](int action){
-				auto q =  net.q_values_blob->data_at(index,action,0,0);
+				auto q = q_values_blob->data_at(index,action,0,0);
 				assert(is_valid_q(q));
 				return q;
 			};
@@ -302,21 +292,47 @@ public :
 	class Trainer
 	{
 	public :
-		DeepNetwork& net;
-		Trainer(DeepNetwork& net) : net(net) {}
+		DeepNetwork& net;		
+		float gamma;		
 
 		FramesLayerInputData frames_input;
   		TargetLayerInputData target_input;
   		FilterLayerInputData filter_input;
 
+  		ReplayMemory replay_memory;	
+
   		std::array<const Experience*,MinibatchSize> samples;
-		std::array<InputFrames,MinibatchSize> input_frames_batch;		
+		std::array<InputFrames,MinibatchSize> input_frames_batch;
+
+		BlobSp loss_blob;
+
+		Trainer(DeepNetwork& net) : net(net), gamma(FLAGS_gamma), replay_memory(net) 
+		{
+			init();
+		}
+
+		void init()
+		{
+			loss_blob = net.net->blob_by_name("loss");
+		}
+
+		void push(const Experience& e)
+		{
+			replay_memory.push(e);
+		}
 
 		void train()
-		{			
+		{
+			++net.epsilon;
+			
+			if (!replay_memory.has_more_than(net.epsilon.learning_steps_burnin))
+			{
+				return;
+			}		
+		
 			for (int k=0; k<MinibatchSize; ++k)
 			{
-				const auto& e = net.replay_memory.get_random();
+				const auto& e = replay_memory.get_random();
 				e.check_sanity();
 
 				samples[k] = &e;
@@ -345,7 +361,7 @@ public :
 				const auto e = samples[index];
 				const auto& p = policies[index];
 
-				float r = e->next_frame ? e->reward + net.gamma * p.val : e->reward;			
+				float r = e->next_frame ? e->reward + gamma * p.val : e->reward;			
 
 				e->check_sanity();
 				assert(is_valid_q(r));
@@ -362,6 +378,81 @@ public :
 			net.feeder.input(frames_input,target_input,filter_input);
 
 			net.solver->Step(1);
+
+			std::cout << loss_blob->data_at(0,0,0,0);
+		}
+	};
+
+	class Loader
+	{
+	public :
+		DeepNetwork& net;
+
+		Loader(DeepNetwork& net) : net(net) 
+		{
+			init();
+		}		
+		
+		void init()
+		{
+			caffe::SolverParameter param;
+			LOG(INFO) << FLAGS_solver;
+			// caffe::ReadProtoFromTextFileOrDie(FLAGS_solver, &param);
+
+			std::ifstream t(FLAGS_solver);
+			std::string proto((std::istreambuf_iterator<char>(t)),std::istreambuf_iterator<char>());
+			
+			replace_proto(proto);
+
+			CHECK(google::protobuf::TextFormat::ParseFromString(proto, &param));
+
+			switch (Caffe::mode()) {
+			case Caffe::CPU:
+				param.set_solver_mode(caffe::SolverParameter_SolverMode_CPU);
+				break;
+			case Caffe::GPU:
+				param.set_solver_mode(caffe::SolverParameter_SolverMode_GPU);
+				break;
+			default:
+				LOG(FATAL) << "Unknown Caffe mode: " << Caffe::mode();
+			}
+			
+			net.solver.reset(caffe::GetSolver<float>(param));
+			net.net = net.solver->net();
+		}
+
+		void load_trained(const std::string& model_bin)
+		{
+			net.net->CopyTrainedLayersFrom(model_bin);
+		}
+
+	private:
+		void replace_proto(std::string& proto)
+		{
+			std::unordered_map<std::string, std::string> dictionary;
+
+			auto dict_add_int = [&](std::string key, int value) {
+				dictionary[key] = str(format("%d")%value);
+			};
+
+			dict_add_int("BATCH_SIZE",MinibatchSize);
+			dict_add_int("NUM_ACTIONS",num_actions);
+			dict_add_int("SIGHT_SIZE",sight_diameter);
+			dict_add_int("TEMPORAL_WINDOW_PLUS_1",temporal_window + 1);
+
+			for (;;)
+			{
+				auto found = proto.find("{{");
+				if (found == std::string::npos) break;
+
+				auto closing = proto.find("}}");
+				if (closing == std::string::npos) break;
+
+				if (found > closing) break;
+
+				auto key = proto.substr(found+2,closing-found-2);
+				proto = proto.replace(found,closing-found+2,dictionary[key]);
+			}
 		}
 	};
 
@@ -379,110 +470,37 @@ public :
 			}
 		}
 	}
-
-	typedef shared_ptr<caffe::Blob<float>> BlobSp;
-	typedef shared_ptr<caffe::Net<float>> NetSp;
-	typedef shared_ptr<caffe::Solver<float>> SolverSp;
-
-	Feeder feeder;
-	ReplayMemory replay_memory;	
 	
+
+	AnnealedEpsilon epsilon;		
+	NetSp net;
+	SolverSp solver;	
+
+	Loader loader;
+	Feeder feeder;		
 	Evaluator<1> eval_for_prediction;
 	Evaluator<MinibatchSize> eval_for_train;
 	Trainer trainer;
-
-	BlobSp q_values_blob;
-	NetSp net;
-	SolverSp solver;
-	mutable std::mt19937 random_engine;
-
-	AnnealedEpsilon epsilon;	
-	float gamma;	
-
-	int randint(int N) const
-	{
-		return std::uniform_int_distribution<>(0,N-1)(random_engine);
-	}
 	
-	DeepNetwork()
-	: gamma(FLAGS_gamma), trainer(*this), eval_for_prediction(*this), eval_for_train(*this), replay_memory(*this), feeder(*this)
-	{		
-		net_init();
-	}
+	DeepNetwork(Environment& env)
+	: epsilon(env), env(env), loader(*this), trainer(*this), eval_for_prediction(*this), eval_for_train(*this), feeder(*this)
+	{}		
 
-	void load_trained(const std::string& model_bin)
-	{
-		net->CopyTrainedLayersFrom(model_bin);
-	}
-
-	void net_init()
-	{
-		net_create();
-
-		feeder.init();
-	}
-
-	void net_create()
-	{
-		caffe::SolverParameter param;
-		LOG(INFO) << FLAGS_solver;
-		// caffe::ReadProtoFromTextFileOrDie(FLAGS_solver, &param);
-
-		std::ifstream t(FLAGS_solver);
-		std::string proto((std::istreambuf_iterator<char>(t)),std::istreambuf_iterator<char>());
-		
-		replace_proto(proto);
-
-		CHECK(google::protobuf::TextFormat::ParseFromString(proto, &param));
-
-		switch (Caffe::mode()) {
-		case Caffe::CPU:
-			param.set_solver_mode(caffe::SolverParameter_SolverMode_CPU);
-			break;
-		case Caffe::GPU:
-			param.set_solver_mode(caffe::SolverParameter_SolverMode_GPU);
-			break;
-		default:
-			LOG(FATAL) << "Unknown Caffe mode: " << Caffe::mode();
-		}
-		
-		solver.reset(caffe::GetSolver<float>(param));
-		net = solver->net();
-		q_values_blob = net->blob_by_name("q_values");
-	}
-
-	Policy policy(const InputFrames& input_frames,std::function<bool(int)> is_valid_action)
-	{
-		return eval_for_prediction.evaluate(std::array<InputFrames,1>{{input_frames}},is_valid_action).front();
-	}	
-
-	Policy predict(const InputFrames& input_frames,std::function<int()> random_action,std::function<bool(int)> is_valid_action)
-	{		
+	Policy predict(const InputFrames& input_frames,RandomActionFunctionType random_action,IsValidActionFunctionType is_valid_action)
+	{	
 		if (epsilon.should_do_random_action())
 		{
 			return Policy(random_action());
 		}
 		else
 		{
-			Policy p = policy(input_frames,is_valid_action);
-			if (is_valid_action(p.action))
-			{
-				return p;
-			}
-			else
-			{
-				std::cout << "couldn't predict well\n";
-				return Policy(random_action());
-			}
+			return eval_for_prediction.evaluate(std::array<InputFrames,1>{{input_frames}},is_valid_action).front();
 		}
 	}		
 
 	void train()
 	{
-		if (replay_memory.has_enough())
-		{
-			trainer.train();
-		}
+		trainer.train();		
 	}	
 };
 

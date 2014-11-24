@@ -74,8 +74,10 @@ int main(int argc, char** argv)
 
 	GameState game_state;
 
-	boost::shared_ptr<DeepNetwork> hero_net(new DeepNetwork);	
-	boost::shared_ptr<DeepNetwork> minion_net(new DeepNetwork);	
+	Environment env;
+
+	boost::shared_ptr<DeepNetwork> hero_net(new DeepNetwork(env));	
+	boost::shared_ptr<DeepNetwork> minion_net(new DeepNetwork(env));	
 
 	std::vector<boost::shared_ptr<DeepNetwork>> nets;
 	nets.push_back(hero_net);

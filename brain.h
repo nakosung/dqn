@@ -24,7 +24,7 @@ public:
 				exit(-1);
 			}
 			current_experience.next_frame = next_frame;					
-			network->replay_memory.push(current_experience);							
+			network->trainer.push(current_experience);							
 
 			has_pending_experience = false;
 		}
