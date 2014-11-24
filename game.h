@@ -266,12 +266,12 @@ class Actable : public Agent
 public:
 	typedef Agent Base;
 
-	float reward;
+	float reward, acc_reward;
 	boost::shared_ptr<AgentBrain> brain;
 
-	Actable() : num_actions(1), reward(0), brain(nullptr) {}
+	Actable() : num_actions(1), reward(0), brain(nullptr), acc_reward(0) {}
 
-	virtual std::string detail() { return str(format("%s R(%.2f) B(%s)")%Base::detail()%reward%(brain ? brain->detail() : "none")); }
+	virtual std::string detail() { return str(format("%s R(%5.2f) B(%s)")%Base::detail()%acc_reward%(brain ? brain->detail() : "none")); }
 
 	int num_actions;
 	int action;	
@@ -279,8 +279,6 @@ public:
 	virtual void forward()
 	{
 		Base::forward();
-
-		reward = 0;
 
 		if (brain)
 		{
@@ -320,8 +318,11 @@ public:
 
 		if (brain)
 		{
-			reward *= 0.1f;			
+			//reward *= 0.1f;			
 			brain->backward(std::min(1.0f,std::max(-1.0f,reward)));
+
+			acc_reward = acc_reward * brain->network->trainer.gamma + reward;
+			reward = 0;
 		}
 	}
 

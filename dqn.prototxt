@@ -13,22 +13,22 @@ net_param {
 	  top: "frames"
 	  top: "dummy1"
 	  memory_data_param {
-	    batch_size: {{BATCH_SIZE}}
-	    channels: {{TEMPORAL_WINDOW_PLUS_1}}
-	    height: {{SIGHT_SIZE}}
-	    width: {{SIGHT_SIZE}}
+		batch_size: {{BATCH_SIZE}}
+		channels: {{TEMPORAL_WINDOW_PLUS_1}}
+		height: {{SIGHT_SIZE}}
+		width: {{SIGHT_SIZE}}
 	  }
-	}
+	}	
 	layers {
 	  name: "target_input_layer"
 	  type: MEMORY_DATA
 	  top: "target"
 	  top: "dummy2"
 	  memory_data_param {
-	    batch_size: {{BATCH_SIZE}}
-	    channels: {{NUM_ACTIONS}}
-	    height: 1
-	    width: 1
+		batch_size: {{BATCH_SIZE}}
+		channels: {{NUM_ACTIONS}}
+		height: 1
+		width: 1
 	  }
 	}
 	layers {
@@ -37,10 +37,10 @@ net_param {
 	  top: "filter"
 	  top: "dummy3"
 	  memory_data_param {
-	    batch_size: {{BATCH_SIZE}}
-	    channels: {{NUM_ACTIONS}}
-	    height: 1
-	    width: 1
+		batch_size: {{BATCH_SIZE}}
+		channels: {{NUM_ACTIONS}}
+		height: 1
+		width: 1
 	  }
 	}
 	layers {
@@ -56,13 +56,13 @@ net_param {
 	  bottom: "frames"
 	  top: "conv1"
 	  convolution_param {
-	    num_output: 16
-	    kernel_size: 8
-	    stride: 4
-	    weight_filler {
-	      type: "gaussian"
-	      std: 0.01
-	    }
+		num_output: 16
+		kernel_size: 8
+		stride: 4
+		weight_filler {
+		  type: "gaussian"
+		  std: 0.01
+		}
 	  }
 	}
 	layers {
@@ -71,7 +71,7 @@ net_param {
 	  bottom: "conv1"
 	  top: "conv1"
 	  relu_param {
-	    negative_slope: 0.01
+		negative_slope: 0.01
 	  }
 	}
 	layers {
@@ -80,13 +80,13 @@ net_param {
 	  bottom: "conv1"
 	  top: "conv2"
 	  convolution_param {
-	    num_output: 32
-	    kernel_size: 4
-	    stride: 2
-	    weight_filler {
-	      type: "gaussian"
-	      std: 0.01
-	    }
+		num_output: 32
+		kernel_size: 4
+		stride: 2
+		weight_filler {
+		  type: "gaussian"
+		  std: 0.01
+		}
 	  }
 	}
 	layers {
@@ -95,7 +95,7 @@ net_param {
 	  bottom: "conv2"
 	  top: "conv2"
 	  relu_param {
-	    negative_slope: 0.01
+		negative_slope: 0.01
 	  }
 	}
 	layers {
@@ -104,11 +104,11 @@ net_param {
 	  bottom: "conv2"
 	  top: "ip1"
 	  inner_product_param {
-	    num_output: 256
-	    weight_filler {
-	      type: "gaussian"
-	      std: 0.01
-	    }
+		num_output: 256
+		weight_filler {
+		  type: "gaussian"
+		  std: 0.01
+		}
 	  }
 	}
 	layers {
@@ -117,7 +117,7 @@ net_param {
 	  bottom: "ip1"
 	  top: "ip1"
 	  relu_param {
-	    negative_slope: 0.01
+		negative_slope: 0.01
 	  }
 	}
 	layers {
@@ -126,11 +126,11 @@ net_param {
 	  bottom: "ip1"
 	  top: "q_values"
 	  inner_product_param {
-	    num_output: {{NUM_ACTIONS}}
-	    weight_filler {
-	      type: "gaussian"
-	      std: 0.01
-	    }
+		num_output: {{NUM_ACTIONS}}
+		weight_filler {
+		  type: "gaussian"
+		  std: 0.01
+		}
 	  }
 	}
 	layers {
@@ -140,7 +140,7 @@ net_param {
 	  bottom: "filter"
 	  top: "filtered_q_values"
 	  eltwise_param {
-	    operation: PROD
+		operation: PROD
 	  }
 	}
 	layers {

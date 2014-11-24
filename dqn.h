@@ -11,7 +11,7 @@ DEFINE_int32(experience_size, 100000, "experience_size");
 DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
 DEFINE_int32(learning_steps_total, 500000, "learning_steps_total");
 DEFINE_int32(epsilon_min, 0.1, "epsilon_min");
-DEFINE_double(gamma, 0.95, "gamma");
+DEFINE_double(gamma, 0.98, "gamma");
 DEFINE_int32(display_interval, 1, "display_interval");
 DEFINE_int32(display_after, 10000, "display_after");
 
@@ -71,7 +71,7 @@ public:
 	{}
 
 	float get() const
-	{
+	{		
 		if (is_learning)
 		{			
 			return std::min(1.0f,std::max(epsilon_min, 1.0f-(float)(age - learning_steps_burnin)/(learning_steps_total - learning_steps_burnin)));
@@ -83,7 +83,7 @@ public:
 	}
 
 	bool should_do_random_action() const
-	{
+	{		
 		const float eps = get();
 		assert(is_valid_epsilon(eps));
 		return env.test_prob(eps);
@@ -164,6 +164,57 @@ public :
 		MemoryDataLayerSp filter_input_layer;
 		TargetLayerInputData dummy_input_data;
 
+		class Cursor
+		{
+		public:
+			FramesLayerInputData frames_input;
+	  		TargetLayerInputData target_input;	  		
+	  		FilterLayerInputData filter_input;
+	  		Feeder& feeder;
+
+			Cursor(Feeder& feeder) : feeder(feeder)
+			{}
+
+			FramesLayerInputData::iterator frames;
+			TargetLayerInputData::iterator target;
+			FilterLayerInputData::iterator filter;
+
+			void begin()
+			{
+				frames = frames_input.begin();
+				target = target_input.begin();
+				filter = filter_input.begin();
+
+				std::fill(target_input.begin(),target_input.end(),0);
+				std::fill(filter_input.begin(),filter_input.end(),0);
+			}
+
+			template <typename U>
+			void write_frames(const U& input_frames)
+			{				
+				SingleFrame::fill_frames(frames,input_frames);				
+			}
+
+			void write_target(int action, float r)
+			{
+				target[action] = r;
+				filter[action] = 1.0f;
+			}
+
+			void advance()
+			{
+				target += OutputCount;
+				filter += OutputCount;
+			}
+
+			void done()
+			{
+				std::fill(frames, frames_input.end(), 0);									
+				
+				feeder.input(frames_input,target_input,filter_input);
+			}
+		};		
+
 		Feeder(DeepNetwork& net)
 		: net(net)
 		{		
@@ -189,6 +240,11 @@ public :
 		{
 			input( frames, dummy_input_data, dummy_input_data );
 			net.net->ForwardPrefilled(nullptr);
+		}
+
+		void forward()
+		{
+			net.net->ForwardPrefilled(nullptr);			
 		}
 
 		void cache_layers()
@@ -229,8 +285,9 @@ public :
 
 		DeepNetwork& net;
 		BlobSp q_values_blob;
+		Feeder::Cursor cursor;
 
-		Evaluator(DeepNetwork& net) : net(net) 
+		Evaluator(DeepNetwork& net) : net(net), cursor(net.feeder)
 		{
 			init();
 		}
@@ -243,19 +300,16 @@ public :
 		std::array<Policy,N> policies;
 		std::array<Policy,N>& evaluate(const std::array<InputFrames,N>& input_frames_batch,IsValidActionFunctionType is_valid_action)
 		{			
-			FramesLayerInputData frames_input;
-			auto target = frames_input.begin();
+			cursor.begin();
 			for (const auto& input_frames : input_frames_batch)
 			{
-				SingleFrame::fill_frames(target,input_frames);
-			}  
-			for (int index=N; index<MinibatchSize; ++index)
-			{
-				std::fill(target, target + InputDataSize, 0);
-				target += InputDataSize;
-			}
+				cursor.write_frames(input_frames);
+				cursor.advance();
+			}  			
+
+			cursor.done();
 	  
-			net.feeder.input(frames_input);			
+			net.feeder.forward();
 
 			int index = 0;
 			std::generate(policies.begin(), policies.end(), [&](){ return get_policy(index++,is_valid_action); });
@@ -295,9 +349,7 @@ public :
 		DeepNetwork& net;		
 		float gamma;		
 
-		FramesLayerInputData frames_input;
-  		TargetLayerInputData target_input;
-  		FilterLayerInputData filter_input;
+		Feeder::Cursor cursor;
 
   		ReplayMemory replay_memory;	
 
@@ -306,7 +358,7 @@ public :
 
 		BlobSp loss_blob;
 
-		Trainer(DeepNetwork& net) : net(net), gamma(FLAGS_gamma), replay_memory(net) 
+		Trainer(DeepNetwork& net) : net(net), gamma(FLAGS_gamma), replay_memory(net), cursor(net.feeder)
 		{
 			init();
 		}
@@ -318,13 +370,13 @@ public :
 
 		void push(const Experience& e)
 		{
+			++net.epsilon;
+			
 			replay_memory.push(e);
 		}
 
 		void train()
-		{
-			++net.epsilon;
-			
+		{			
 			if (!replay_memory.has_more_than(net.epsilon.learning_steps_burnin))
 			{
 				return;
@@ -349,13 +401,8 @@ public :
 
 			const auto& policies = net.eval_for_train.evaluate(input_frames_batch,[=](int action){return true;});
 
-			auto frame = frames_input.begin();
-			auto target = target_input.begin();
-			auto filter = filter_input.begin();
-
-			std::fill(target_input.begin(),target_input.end(),0);
-			std::fill(filter_input.begin(),filter_input.end(),0);
-  	
+			cursor.begin();
+			
 			for (int index=0; index<MinibatchSize; ++index)
 			{
 				const auto e = samples[index];
@@ -366,20 +413,22 @@ public :
 				e->check_sanity();
 				assert(is_valid_q(r));
 
-				SingleFrame::fill_frames(frame,e->input_frames);
+				cursor.write_frames(e->input_frames);
+				cursor.write_target(e->action,r);
 				
-				target[e->action] = r;
-				filter[e->action] = 1.0f;
-				
-				target += num_actions;
-				filter += num_actions;
+				cursor.advance();
 			}
 
-			net.feeder.input(frames_input,target_input,filter_input);
+			cursor.done();
 
 			net.solver->Step(1);
 
-			std::cout << loss_blob->data_at(0,0,0,0);
+			std::cout << loss();
+		}
+
+		float loss() const
+		{
+			return loss_blob->data_at(0,0,0,0);			
 		}
 	};
 
@@ -469,8 +518,7 @@ public :
 				assert(!std::isnan(v));
 			}
 		}
-	}
-	
+	}	
 
 	AnnealedEpsilon epsilon;		
 	NetSp net;
