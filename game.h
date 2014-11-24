@@ -3,6 +3,7 @@ auto ANSI = "\033[";
 struct GameState
 {
 	std::array<int,2> scores;
+	std::array<std::string,2> names;
 	int epoch;
 	int clock;
 
@@ -10,6 +11,12 @@ struct GameState
 	: epoch(0), clock(0)
 	{
 		std::fill(scores.begin(),scores.end(),0);
+	}
+
+	void swap_team()
+	{
+		std::swap(scores[0],scores[1]);
+		std::swap(names[0],names[1]);
 	}
 };
 
@@ -266,7 +273,6 @@ public:
 
 	bool is_solid(const Vector& v) const
 	{
-		return false;
 		return abs(v.x - world_size/2) <= world_size / 4 && abs(v.y - world_size/2) <= 0;
 	}
 };
@@ -460,7 +466,7 @@ public:
 		int y = 0;
 		auto logline = [&](std::string x) { newlines.push_back(x); };
 		logline(str(format("agents %3d clock %8d epoch %8d")%world.agents.size()%world.game_state.clock%world.game_state.epoch));
-		logline(str(format("score: %d : %d")%world.game_state.scores[0]%world.game_state.scores[1]));
+		logline(str(format("%s(%d) : %s(%d)")%world.game_state.names[0]%world.game_state.scores[0]%world.game_state.names[1]%world.game_state.scores[1]));
 
 		// I know, it's too slow.. :)
 		std::string reset(str(format("%s40m")%ANSI));

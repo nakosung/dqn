@@ -17,6 +17,7 @@ DEFINE_bool(gpu, false, "Use GPU to brew Caffe");
 DEFINE_int32(iterations,200000, "iterations");
 DEFINE_string(solver, "dqn_solver.prototxt",  "The solver definition protocol buffer text file.");
 DEFINE_string(model, "", "trained model filename");
+DEFINE_string(model2, "", "trained model filename");
 
 #include "dqn.h"
 #include "game.h"
@@ -27,29 +28,29 @@ DEFINE_string(model, "", "trained model filename");
 
 int kbhit(void)
 {
-  struct termios oldt, newt;
-  int ch;
-  int oldf;
- 
-  tcgetattr(STDIN_FILENO, &oldt);
-  newt = oldt;
-  newt.c_lflag &= ~(ICANON | ECHO);
-  tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-  oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
-  fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
- 
-  ch = getchar();
- 
-  tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-  fcntl(STDIN_FILENO, F_SETFL, oldf);
- 
-  if(ch != EOF)
-  {
-    ungetc(ch, stdin);
-    return 1;
-  }
- 
-  return 0;
+	struct termios oldt, newt;
+	int ch;
+	int oldf;
+
+	tcgetattr(STDIN_FILENO, &oldt);
+	newt = oldt;
+	newt.c_lflag &= ~(ICANON | ECHO);
+	tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+	oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
+	fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
+
+	ch = getchar();
+
+	tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+	fcntl(STDIN_FILENO, F_SETFL, oldf);
+
+	if(ch != EOF)
+	{
+		ungetc(ch, stdin);
+		return 1;
+	}
+
+	return 0;
 }
 
 int main(int argc, char** argv) 
@@ -75,20 +76,32 @@ int main(int argc, char** argv)
 
 	Environment env(random_engine);
 
+	bool should_swap = false;
+
 	boost::shared_ptr<DeepNetwork> dqn(new DeepNetwork(env,FLAGS_solver));	
 	boost::shared_ptr<DeepNetwork> dqn_trained(new DeepNetwork(env,FLAGS_solver));	
 	if (FLAGS_model != "")
 	{
+		game_state.names[1] = FLAGS_model;
 		dqn_trained->loader.load_trained(FLAGS_model);
+		should_swap = true;
 	}
 	else
 	{
 		dqn_trained = dqn;
 	}
-	
-	
+
 	std::vector<boost::shared_ptr<DeepNetwork>> nets;
-	nets.push_back(dqn);
+	if (FLAGS_model2 != "")
+	{
+		game_state.names[0] = FLAGS_model2;
+		dqn->loader.load_trained(FLAGS_model2);
+		should_swap = false;
+	}
+	else
+	{
+		nets.push_back(dqn);		
+	}		
 
 	auto train_nets = [&]{
 		for (auto n : nets)
@@ -100,6 +113,7 @@ int main(int argc, char** argv)
 		}
 	};
 
+	int training_team = 0;
 	bool quit = false;	
 	for (;!quit;game_state.epoch++)
 	{
@@ -125,7 +139,7 @@ int main(int argc, char** argv)
 
 		auto spawn = [&](int team,std::function<Agent*(int team)> gen){
 			auto pawn = w.spawn([&]{return gen(team);});
-			static_cast<Pawn*>(pawn)->brain.reset(new HeroBrain(team == 0 ? dqn : dqn_trained,&w));
+			static_cast<Pawn*>(pawn)->brain.reset(new HeroBrain(team == training_team ? dqn : dqn_trained,&w));
 			pawn->pos = pos_gen([&]{return Vector(x_dist(random_engine),team * (w.size.y - 1));});				
 		};			
 
@@ -159,6 +173,12 @@ int main(int argc, char** argv)
 			train_nets();
 			disp.tick();
 		}	
+
+		if (should_swap)
+		{
+			training_team = 1-training_team;
+			game_state.swap_team();
+		}		
 	}	
 	return 0;
 }
