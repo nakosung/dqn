@@ -115,7 +115,8 @@ struct Event
 	{
 		event_attack,
 		event_takedamage,
-		event_die
+		event_die,
+		event_heal
 	};
 	
 	EventType type;
@@ -131,6 +132,7 @@ struct Event
 			case event_attack : return "A";
 			case event_takedamage : return "D";
 			case event_die : return "X";
+			case event_heal : return "+";
 			default : return "?";
 		}
 	}
@@ -390,7 +392,7 @@ public:
 	virtual void do_action(int action) {}
 };
 
-static Vector dir_vec[] = {{1,0},{0,1},{-1,0},{0,-1}};
+static Vector dir_vec[num_move_dirs] = {{1,0},{0,1},{-1,0},{0,-1}};
 
 class Movable : public Actable
 {
@@ -573,22 +575,37 @@ enum PawnType
 	PT_max
 };
 
+enum SkillEffect
+{
+	SE_nothing,
+	SE_heal,
+	SE_deal
+};
+
+struct SkillParams
+{
+	SkillEffect type;
+	int cooldown;
+	int range;
+};
+
 class Pawn : public Movable
 {
 public :
 	typedef Movable Base;
 
 	// schema
-	int max_cooldown;
 	int max_health;
 
 	int team;
 	int health;	
-	int cooldown;
 	int death_timer;
 	char code;
 	PawnType type;
 	int range;
+
+	std::array<SkillParams,max_skills> skill_params;
+	std::array<int,max_skills> cooldown;
 
 	float attack_reward, kill_reward;
 
@@ -599,10 +616,11 @@ public :
 	virtual std::string one_letter() { return colorize(str(format("%c")%code)); }
 	virtual std::string detail() { return colorize(str(format("%c[%d] hp:%d %s")%code%team%health%Base::detail())); }
 
-	Pawn(PawnType type, int team,int in_max_cooldown,int in_max_health, char code, int range, float attack_reward, float kill_reward)
-	: type(type), max_health(in_max_health), max_cooldown(in_max_cooldown), team(team), health(in_max_health), cooldown(0), code(code), death_timer(0), range(range), attack_reward(attack_reward), kill_reward(kill_reward)
+	Pawn(PawnType type, int team,const std::array<SkillParams,max_skills>& skill_params,int in_max_health, char code, float attack_reward, float kill_reward)
+	: type(type), max_health(in_max_health), skill_params(skill_params), team(team), health(in_max_health), code(code), death_timer(0), attack_reward(attack_reward), kill_reward(kill_reward)
 	{
-		num_actions += 1;
+		std::fill(cooldown.begin(),cooldown.end(),0);
+		num_actions += max_skills;
 	}
 
 	virtual void game_over(int winner)
@@ -624,21 +642,51 @@ public :
 		Base::check_sanity();
 
 		assert(health <= max_health);
-		assert(cooldown <= max_cooldown);
-		assert(range >= 0);
 		assert(team >= 0 && team < 2);
 		assert(!std::isnan(attack_reward));
 		assert(!std::isnan(kill_reward));
 	}
 
-	virtual Pawn* find_target() const
+	bool can_affect( SkillEffect type, Pawn* b ) const
 	{
-		int best_dist = square(range+1);
+		if (b && b != this && !b->pending_kill)
+		{
+			switch (type)
+			{
+				case SE_deal : return b->team != team;
+				case SE_heal : return b->team == team && b->health < b->max_health;
+				default : return false;
+			}			
+		}
+		return false;
+	}
+
+	virtual void do_affect(SkillEffect type,Pawn* b)
+	{	
+		if (can_affect(type,b))
+		{
+			switch (type)
+			{
+				case SE_deal: 
+					b->take_damage(1,this);
+					break;
+				case SE_heal:
+					b->heal(1,this);
+					break;
+			}
+		}
+	}
+	
+
+	virtual Pawn* find_target(int slot) const
+	{
+		const auto& param = skill_params[slot];
+		int best_dist = square(param.range+1);
 		Pawn* best = nullptr;
 		for (auto a:world->agents)
 		{
 			auto b = dynamic_cast<Pawn*>(a.get());
-			if (b && b != this && !b->pending_kill && b->team != team)
+			if (can_affect(param.type,b))
 			{
 				auto dist = distance_squared(pos,b->pos);
 				if (dist < best_dist)
@@ -671,9 +719,10 @@ public :
 		if (attacker && !attacker->pending_kill)
 		{
 			attacker->reward += attack_reward;
-			world->add_event(Event(Event::event_takedamage,pos));	
 			world->add_event(Event(Event::event_attack,attacker->pos));	
 		}
+
+		world->add_event(Event(Event::event_takedamage,pos));
 
 		// reward -= 1.0f;
 
@@ -682,6 +731,16 @@ public :
 			world->add_event(Event(Event::event_die,pos));	
 			health = 0;	
 			die(attacker);
+		}
+	}
+
+	virtual void heal(int amount, Pawn* healer)
+	{	
+		health += amount;
+
+		if (health > max_health)
+		{
+			health = max_health;
 		}
 	}
 
@@ -700,6 +759,11 @@ public :
 		return r;
 	}	
 
+	float skill_pct(int slot) const
+	{
+		return (float)cooldown[slot] / skill_params[slot].cooldown;
+	}
+
 	virtual void tick()
 	{
 		Base::tick();
@@ -710,36 +774,43 @@ public :
 			// take_damage(2,nullptr);
 		}
 
-		if (cooldown>0)
-			cooldown--;
+		for (auto& c : cooldown)
+		{
+			if (c>0)
+				c--;			
+		}
+
 
 		//reward = std::max( reward, smell() * 0.01f );
 	}
 
 	virtual bool is_valid_action(int action) const
 	{
-		if (action == 0)
+		if (action < max_skills)
 		{	
-			return cooldown == 0 && find_target() != nullptr;
+			return cooldown[action] == 0 && find_target(action) != nullptr;
 		}
 		else
 		{
-			return Base::is_valid_action(action-1);
+			return Base::is_valid_action(action-max_skills);
 		}
 	}
 
 	virtual void do_action(int action)
 	{
-		if (action == 0)
+		if (action < max_skills)		
 		{			
-			cooldown = max_cooldown;
-			auto target = find_target();			
+			const auto& param = skill_params[action];
+			cooldown[action] = param.cooldown;
+			auto target = find_target(action);			
 			if (target) 
-				target->take_damage(1,this);
+			{
+				do_affect(param.type,target);
+			}
 		}
 		else
 		{
-			Base::do_action(action-1);
+			Base::do_action(action-max_skills);
 		}
 	}
 };
@@ -747,19 +818,13 @@ public :
 class Minion : public Pawn
 {
 public :
-	Minion(int team) : Pawn(PT_minion,team,5,2,'m',1,0.1f,0.5f) {}
-};
-
-class RangeMinion : public Pawn
-{
-public :
-	RangeMinion(int team) : Pawn(PT_range,team,3,1,'r',2,0.1f,0.5f) {}
+	Minion(int team) : Pawn(PT_minion,team,{{SE_deal,5,1}},2,'m',0.1f,0.5f) {}
 };
 
 class Hero : public Pawn
 {
 public :
-	Hero(int team) : Pawn(PT_hero, team, 15,3,'H',3,0.2f,1.0f) {}
+	Hero(int team) : Pawn(PT_hero, team, {{SE_deal,15,3}},3,'H',0.2f,1.0f) {}
 	virtual void die(Pawn* attacker)
 	{
 		world->game_over(attacker ? attacker->team : -1);
@@ -840,7 +905,10 @@ public:
 			write(0,a->pos,a->type);
 			write(1,a->pos,(float)a->health / a->max_health);
 			write(2,a->pos,(a->team == self->team) ? 1 : -1);			
-			write(4,a->pos,(float)a->cooldown / a->max_cooldown);
+			for (int i=0; i<max_skills; ++i)
+			{
+				write(4+i,a->pos,a->skill_pct(i));
+			}
 		}
 
 		for (const auto& e : agent->world->events)
@@ -850,9 +918,12 @@ public:
 
 		auto& stats = single_frame->stats;
 		stats[0] = world->game_state.clock / 1000.0f;
-		stats[1] = (float)self->health / self->max_health;
-		stats[2] = (float)self->cooldown / self->max_cooldown;
-		stats[3] = self->type;
+		stats[1] = (float)self->health / self->max_health;		
+		stats[2] = self->type;
+		for (int i=0; i<max_skills; ++i)
+		{
+			stats[3+i] = self->skill_pct(i);
+		}		
 		return single_frame;
 	}
 };

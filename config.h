@@ -3,7 +3,9 @@ enum { temporal_window = 3 };
 enum { sight_diameter = 20 };
 enum { world_size = sight_diameter / 2 };
 enum { sight_area = sight_diameter * sight_diameter };
-enum { num_actions = 6 };
+enum { max_skills = 1 };
+enum { num_move_dirs = 4 };
+enum { num_actions = 1 + num_move_dirs + max_skills };
 enum { channels = 5 };
 
 enum { MinibatchSize = 32 };
