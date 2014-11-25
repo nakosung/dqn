@@ -675,7 +675,7 @@ public :
 		if (cooldown>0)
 			cooldown--;
 
-		reward = std::max( reward, smell() * 0.01f );
+		//reward = std::max( reward, smell() * 0.01f );
 	}
 
 	virtual bool is_valid_action(int action) const

@@ -7,10 +7,11 @@
 #include <streambuf>
 #include <unordered_map>
 
-DEFINE_int32(experience_size, 100000, "experience_size");
-DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
+DEFINE_int32(experience_size, 10, "experience_size percent");
 DEFINE_int32(learning_steps_total, 500000, "learning_steps_total");
+DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
 DEFINE_int32(epsilon_min, 0.1, "epsilon_min");
+DEFINE_int32(epsilon_test, 0.05, "epsilon_test");
 DEFINE_double(gamma, 0.95, "gamma");
 DEFINE_int32(display_interval, 1, "display_interval");
 DEFINE_int32(display_after, 10000, "display_after");
@@ -67,7 +68,7 @@ public:
 	int learning_steps_total, learning_steps_burnin;	
 
 	AnnealedEpsilon(Environment& env)
-	: env(env), is_learning(true), age(0), epsilon_min(FLAGS_epsilon_min), learning_steps_burnin(FLAGS_learning_steps_burnin < 0 ? FLAGS_learning_steps_total / 10 : FLAGS_learning_steps_burnin), learning_steps_total(FLAGS_learning_steps_total), epsilon_test_time(0.1)
+	: env(env), is_learning(true), age(0), epsilon_min(FLAGS_epsilon_min), learning_steps_burnin(FLAGS_learning_steps_burnin < 0 ? FLAGS_learning_steps_total / 10 : FLAGS_learning_steps_burnin), learning_steps_total(FLAGS_learning_steps_total), epsilon_test_time(FLAGS_epsilon_test)
 	{}
 
 	float get() const
@@ -118,7 +119,7 @@ public :
 		DeepNetwork& net;
 
 		ReplayMemory(DeepNetwork& net)
-		: size(FLAGS_experience_size), net(net)
+		: size(std::max(0,std::min(100,FLAGS_experience_size)) * FLAGS_learning_steps_total / 100), net(net)
 		{
 			experiences.reserve(size);
 		}

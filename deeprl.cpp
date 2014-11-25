@@ -14,7 +14,6 @@ using boost::str;
 using boost::format;
 
 DEFINE_bool(gpu, false, "Use GPU to brew Caffe");
-DEFINE_int32(iterations,200000, "iterations");
 DEFINE_string(solver, "dqn_solver.prototxt",  "The solver definition protocol buffer text file.");
 DEFINE_string(model, "", "trained model filename");
 DEFINE_string(model2, "", "trained model filename");
