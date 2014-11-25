@@ -761,7 +761,8 @@ public :
 
 	float skill_pct(int slot) const
 	{
-		return (float)cooldown[slot] / skill_params[slot].cooldown;
+		const auto& param = skill_params[slot];
+		return param.cooldown == 0 ? 0 : (float)cooldown[slot] / param.cooldown;
 	}
 
 	virtual void tick()
@@ -785,10 +786,10 @@ public :
 	}
 
 	virtual bool is_valid_action(int action) const
-	{
+	{		
 		if (action < max_skills)
 		{	
-			return cooldown[action] == 0 && find_target(action) != nullptr;
+			return cooldown[action] == 0 && skill_params[action].type != SE_nothing && find_target(action) != nullptr;
 		}
 		else
 		{
@@ -799,7 +800,7 @@ public :
 	virtual void do_action(int action)
 	{
 		if (action < max_skills)		
-		{			
+		{	
 			const auto& param = skill_params[action];
 			cooldown[action] = param.cooldown;
 			auto target = find_target(action);			
@@ -818,13 +819,13 @@ public :
 class Minion : public Pawn
 {
 public :
-	Minion(int team) : Pawn(PT_minion,team,{{SE_deal,5,1}},2,'m',0.1f,0.5f) {}
+	Minion(int team) : Pawn(PT_minion,team,{{SE_deal,3,1,SE_heal,5,1}},2,'m',0.1f,0.5f) {}
 };
 
 class Hero : public Pawn
 {
 public :
-	Hero(int team) : Pawn(PT_hero, team, {{SE_deal,15,3}},3,'H',0.2f,1.0f) {}
+	Hero(int team) : Pawn(PT_hero, team, {{SE_deal,15,3,SE_nothing,0,0}},3,'H',0.2f,1.0f) {}
 	virtual void die(Pawn* attacker)
 	{
 		world->game_over(attacker ? attacker->team : -1);
@@ -856,7 +857,7 @@ public:
 		for (auto& image : images)
 		{
 			std::fill(image.begin(),image.end(),0);
-		}		
+		}
 
 		Pawn* self = dynamic_cast<Pawn*>(agent);
 
@@ -866,7 +867,7 @@ public:
 			if (v.x >= 0 && v.y >= 0 && v.x < sight_diameter && v.y < sight_diameter)
 			{
 				images[ch][v.x + v.y * world_size] += val;
-			}			
+			}
 		};
 
 		auto write = [&](int ch, const Vector& p, float val)
@@ -901,10 +902,10 @@ public:
 		{
 			Pawn* a = dynamic_cast<Pawn*>(other.get());
 			if (a == nullptr) continue;
-									
+
 			write(0,a->pos,a->type);
 			write(1,a->pos,(float)a->health / a->max_health);
-			write(2,a->pos,(a->team == self->team) ? 1 : -1);			
+			write(2,a->pos,(a->team == self->team) ? 1 : -1);
 			for (int i=0; i<max_skills; ++i)
 			{
 				write(4+i,a->pos,a->skill_pct(i));
