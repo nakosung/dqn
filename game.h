@@ -140,10 +140,12 @@ public:
 	int final_winner;
 	int world_clock;
 	std::vector<Event> events;
+	int geom;
 	
 	World(std::mt19937& random_engine, GameState& game_state) 
 	: random_engine(random_engine), size(world_size,world_size), game_state(game_state), quit(false), final_winner(-1), world_clock(0)
-	{				
+	{		
+		geom = std::uniform_int_distribution<>(0,1)(random_engine);		
 	}
 
 	void add_event(const Event& event)
@@ -272,8 +274,13 @@ public:
 	}
 
 	bool is_solid(const Vector& v) const
-	{
-		return abs(v.x - world_size/2) <= world_size / 4 && abs(v.y - world_size/2) <= 0;
+	{	
+		switch (geom)
+		{
+		case 0 : return false;
+		case 1 : return abs(v.x - world_size/2) <= world_size / 4 && abs(v.y - world_size/2) <= 0;
+		default : return false;
+		}			
 	}
 };
 
@@ -333,7 +340,7 @@ public:
 		if (is_valid_action(action))
 		{
 			do_action(action);
-		}		
+		}				
 	}
 
 	virtual void backward() 
@@ -640,6 +647,21 @@ public :
 		}
 	}
 
+	float smell() const
+	{
+		float r = 0.0f;
+
+		for (auto agent : world->agents)
+		{
+			auto pawn = dynamic_cast<Pawn*>(agent.get());
+			if (pawn && pawn != this)
+			{
+				r += exp( -distance(pos,pawn->pos) / square(range) );
+			}
+		}
+		return r;
+	}	
+
 	virtual void tick()
 	{
 		Base::tick();
@@ -652,6 +674,8 @@ public :
 
 		if (cooldown>0)
 			cooldown--;
+
+		reward = std::max( reward, smell() * 0.01f );
 	}
 
 	virtual bool is_valid_action(int action) const
@@ -765,6 +789,7 @@ public:
 			write(0,a->pos.x,a->pos.y,a->type);
 			write(1,a->pos.x,a->pos.y,(float)a->health / a->max_health);
 			write(2,a->pos.x,a->pos.y,(a->team == self->team) ? 1 : -1);			
+			write(4,a->pos.x,a->pos.y,(float)a->cooldown / a->max_cooldown);
 		}
 
 		for (const auto& e : agent->world->events)

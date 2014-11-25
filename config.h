@@ -4,7 +4,7 @@ enum { sight_diameter = 20 };
 enum { world_size = sight_diameter / 2 };
 enum { sight_area = sight_diameter * sight_diameter };
 enum { num_actions = 6 };
-enum { channels = 4 };
+enum { channels = 5 };
 
 enum { MinibatchSize = 32 };
 enum { num_stats = 4 };
