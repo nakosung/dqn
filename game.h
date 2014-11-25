@@ -35,10 +35,10 @@ struct ANSI_ESCAPE
 
 struct Vector
 {
-	int x, y;
+	float x, y;
 
 	Vector() {}
-	Vector(int x, int y) : x(x), y(y) {}
+	Vector(float x, float y) : x(x), y(y) {}
 
 	bool is_invalid() const
 	{
@@ -46,13 +46,18 @@ struct Vector
 	}
 };
 
+Vector operator * (const Vector& a, float k)
+{
+	return Vector(a.x * k, a.y * k);
+}
+
 template <typename T>
 T square(T t)
 {
 	return t*t;
 }
 
-int distance( const Vector& a, const Vector& b )
+float distance_squared( const Vector& a, const Vector& b )
 {
 	return square(a.x - b.x) + square(a.y - b.y);
 }
@@ -119,6 +124,16 @@ struct Event
 	Event() {}
 	Event(EventType type, const Vector& location) : type(type), location(location)
 	{}
+	std::string one_letter() const 
+	{ 
+		switch (type)
+		{
+			case event_attack : return "A";
+			case event_takedamage : return "D";
+			case event_die : return "X";
+			default : return "?";
+		}
+	}
 };
 
 class World {
@@ -211,7 +226,7 @@ public:
 
 	void tick() 
 	{
-		events.empty();
+		events.clear();
 
 		game_state.clock++;
 		if (world_clock++ > 1000)
@@ -254,13 +269,13 @@ public:
 		}
 	}	
 
-	bool is_vacant(const Vector& x) const
+	bool is_vacant(const Vector& x,const Agent* self = nullptr) const
 	{
-		if (x.is_invalid()) return false;
+		if (is_solid(x)) return false;
 
 		for (auto a : agents)
 		{
-			if (a->pos == x)
+			if (a.get() != self && distance_squared(a->pos,x) <= 1)
 			{
 				return false;
 			}
@@ -270,15 +285,17 @@ public:
 
 	bool can_move_to(const Agent* a,const Vector& start, const Vector& end) const
 	{
-		return !is_solid(end) && end.x >= 0 && end.y >= 0 && end.x < size.x && end.y < size.y && is_vacant(end);
+		return (is_vacant(end,a) && end.x >= 0 && end.y >= 0 && end.x < size.x && end.y < size.y);		
 	}
 
 	bool is_solid(const Vector& v) const
 	{	
+		if (v.is_invalid()) return true;
+
 		switch (geom)
 		{
 		case 0 : return false;
-		case 1 : return abs(v.x - world_size/2) <= world_size / 4 && abs(v.y - world_size/2) <= 0;
+		case 1 : return false;//abs(v.x - world_size/2) <= world_size / 4 && abs(v.y - world_size/2) <= 0;
 		default : return false;
 		}			
 	}
@@ -380,6 +397,7 @@ class Movable : public Actable
 public:
 	typedef Actable super;
 	int move_action_offset;
+	float speed;
 
 	enum {
 		move_left,
@@ -390,6 +408,7 @@ public:
 	};
 
 	Movable()
+	: speed(0.125f)
 	{
 		move_action_offset = num_actions;
 		num_actions += move_max;
@@ -400,7 +419,7 @@ public:
 		if (action < move_action_offset)
 			return super::is_valid_action(action);
 		
-		return can_move(dir_vec[action - move_action_offset]);
+		return can_move(dir_vec[action - move_action_offset] * speed);
 	}
 
 	virtual void do_action(int action)
@@ -411,7 +430,7 @@ public:
 		int move = action - move_action_offset;
 		assert(move >= 0 && move < move_max);
 
-		do_move(dir_vec[move]);
+		do_move(dir_vec[move] * speed);
 	}
 
 	bool can_move(const Vector& dir) const
@@ -426,7 +445,7 @@ public:
 		auto new_pos = pos + dir;
 
 		if (world->can_move_to(this,pos,new_pos))
-		{
+		{			
 			pos = new_pos;
 		}
 	}
@@ -468,6 +487,8 @@ public:
 			std::cout << ANSI << "1J";
 		}		
 
+		int zoom = 2;
+
 		std::list<Agent*> dirties;
 		std::vector<std::string> newlines;
 		int y = 0;
@@ -477,31 +498,48 @@ public:
 
 		// I know, it's too slow.. :)
 		std::string reset(str(format("%s40m")%ANSI));
-		for (int y=0; y<world.size.y; ++y)
-		{
+		for (int y=0; y<world.size.y * zoom; ++y)
+		{			
 			std::string line = reset + ANSI_ESCAPE::gotoxy(0,y);			
 
-			for (int x=0; x<world.size.x; ++x)
+			for (int x=0; x<world.size.x * zoom; ++x)
 			{
-				if (world.is_solid(Vector(x,y)))
+				auto p = Vector((float)x/zoom,(float)y/zoom);
+
+				if (world.is_solid(p))
 				{
 					line += "#";
 					continue;
 				}
-				bool found = false;
-				for (auto a : world.agents)
+				for (bool found = false;;)
 				{
-					if (a->pos.x == x && a->pos.y == y)
-					{			
-						found = true;			
-						line += a->one_letter();
-						break;
-					}								
-				}
+					for (const auto& a : world.events)
+					{
+						if (distance_squared(p, a.location) < 0.25)
+						{			
+							found = true;			
+							line += a.one_letter();
+							break;
+						}								
+					}
 
-				if (!found)
-				{
-					line += " ";					
+					if (found) break;
+
+					for (auto a : world.agents)
+					{
+						if (distance_squared(p, a->pos) < 0.25)
+						{			
+							found = true;			
+							line += a->one_letter();
+							break;
+						}								
+					}
+
+					if (found) break;
+
+					line += " ";	
+
+					break;
 				}
 			}
 
@@ -519,7 +557,7 @@ public:
 			if (newline != lines[line])
 			{
 				lines[line] = newline;
-				std::cout << ANSI_ESCAPE::gotoxy(world.size.x+5,line+1) << str(format("%-50s")%newline);
+				std::cout << ANSI_ESCAPE::gotoxy(world.size.x*zoom+5,line+1) << str(format("%-50s")%newline);
 			}
 		}	
 
@@ -602,7 +640,7 @@ public :
 			auto b = dynamic_cast<Pawn*>(a.get());
 			if (b && b != this && !b->pending_kill && b->team != team)
 			{
-				auto dist = distance(pos,b->pos);
+				auto dist = distance_squared(pos,b->pos);
 				if (dist < best_dist)
 				{
 					// std::cout << "found_target" << dist << pos.x << "," << pos.y << ":" << b->pos.x << b->pos.y;
@@ -656,7 +694,7 @@ public :
 			auto pawn = dynamic_cast<Pawn*>(agent.get());
 			if (pawn && pawn != this)
 			{
-				r += exp( -distance(pos,pawn->pos) / square(range) );
+				r += exp( -distance_squared(pos,pawn->pos) / square(range) );
 			}
 		}
 		return r;
@@ -757,13 +795,26 @@ public:
 
 		Pawn* self = dynamic_cast<Pawn*>(agent);
 
-		auto write = [&](int ch, int x, int y, float val)
+		auto write_i = [&](int ch, int x, int y, float val)
 		{
 			Vector v(x - self->pos.x + sight_diameter/2,y - self->pos.y + sight_diameter/2);
 			if (v.x >= 0 && v.y >= 0 && v.x < sight_diameter && v.y < sight_diameter)
 			{
-				images[ch][v.x + v.y * world_size] = val;
+				images[ch][v.x + v.y * world_size] += val;
 			}			
+		};
+
+		auto write = [&](int ch, const Vector& p, float val)
+		{
+			auto ix = int(std::floor(p.x));
+			auto iy = int(std::floor(p.y));
+			auto fx = p.x - ix;
+			auto fy = p.y - iy;			
+
+			write_i(ch,ix,iy,val * (1-fx) * (1-fy));
+			write_i(ch,ix+1,iy,val * fx * (1-fy));
+			write_i(ch,ix+1,iy+1,val * fx * fy);
+			write_i(ch,ix,iy+1,val * (1-fx) * fy);
 		};
 
 		for (int y=0; y<world_size; ++y)
@@ -772,11 +823,11 @@ public:
 			{
 				if (agent->world->is_solid(Vector(x,y)))
 				{
-					write(0,x,y,-2);
+					write_i(0,x,y,-2);
 				}				
 				else
 				{
-					write(0,x,y,-1);
+					write_i(0,x,y,-1);
 				}
 			}
 		}
@@ -786,15 +837,15 @@ public:
 			Pawn* a = dynamic_cast<Pawn*>(other.get());
 			if (a == nullptr) continue;
 									
-			write(0,a->pos.x,a->pos.y,a->type);
-			write(1,a->pos.x,a->pos.y,(float)a->health / a->max_health);
-			write(2,a->pos.x,a->pos.y,(a->team == self->team) ? 1 : -1);			
-			write(4,a->pos.x,a->pos.y,(float)a->cooldown / a->max_cooldown);
+			write(0,a->pos,a->type);
+			write(1,a->pos,(float)a->health / a->max_health);
+			write(2,a->pos,(a->team == self->team) ? 1 : -1);			
+			write(4,a->pos,(float)a->cooldown / a->max_cooldown);
 		}
 
 		for (const auto& e : agent->world->events)
 		{
-			write(3,e.location.x,e.location.y,e.type + 1);
+			write(3,e.location,e.type + 1);
 		}
 
 		auto& stats = single_frame->stats;
