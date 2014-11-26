@@ -8,12 +8,12 @@
 #include <unordered_map>
 
 DEFINE_int32(experience_size, 10, "experience_size percent");
-DEFINE_int32(learning_steps_total, 500000, "learning_steps_total");
+DEFINE_int32(learning_steps_total, 200000, "learning_steps_total");
 DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
 DEFINE_int32(epsilon_min, 0.1, "epsilon_min");
 DEFINE_int32(epsilon_test, 0.05, "epsilon_test");
 DEFINE_double(gamma, 0.95, "gamma");
-DEFINE_int32(display_interval, 1, "display_interval");
+DEFINE_int32(display_interval, 5, "display_interval");
 DEFINE_int32(display_after, 10000, "display_after");
 
 typedef std::array<float,num_actions> net_input_type;
@@ -54,7 +54,12 @@ struct Policy
 
 	std::string to_string() const 
 	{ 
-		return val == FLT_MIN ? str(format("%d:rand")%action) : str(format("%d:%.2f")%action%val); 
+		return is_random() ? str(format("%d:rand")%action) : str(format("%d:%.2f")%action%val); 
+	}
+
+	bool is_random() const
+	{
+		return val == FLT_MIN;
 	}
 };
 
@@ -124,9 +129,9 @@ public :
 			experiences.reserve(size);
 		}
 
-		bool has_more_than( size_t num_experiences ) const
+		bool has_enough_samples( size_t num_experiences ) const
 		{
-			return experiences.size() > num_experiences;
+			return experiences.size() >= num_experiences;
 		}
 
 		const Experience& get_random() const
@@ -262,7 +267,7 @@ public :
 
 		void input( const FramesLayerInputData& frames, const StatsLayerInputData& stats, const TargetLayerInputData& target, const FilterLayerInputData& filter )
 		{
-			frames_input_layer->Reset(const_cast<float*>(frames.data()),dummy_input_data.data(),MinibatchSize);
+			frames_input_layer->Reset(const_cast<float*>(frames.data()),dummy_input_data.data(),MinibatchSize);						
 			stats_input_layer->Reset(const_cast<float*>(stats.data()),dummy_input_data.data(),MinibatchSize);
 			target_input_layer->Reset(const_cast<float*>(target.data()),dummy_input_data.data(),MinibatchSize);
 			filter_input_layer->Reset(const_cast<float*>(filter.data()),dummy_input_data.data(),MinibatchSize);
@@ -404,8 +409,8 @@ public :
 		}
 
 		void train()
-		{			
-			if (!replay_memory.has_more_than(net.epsilon.learning_steps_burnin))
+		{				
+			if (!replay_memory.has_enough_samples(net.epsilon.learning_steps_burnin))
 			{
 				return;
 			}		

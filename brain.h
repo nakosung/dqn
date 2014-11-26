@@ -12,7 +12,10 @@ public:
 
 	Brain(NetworkSp network)
 	: forward_passes(0), has_pending_experience(false), network(network)
-	{}
+	{
+		last_non_random_p.val = -1;
+		last_non_random_p.action = -1;
+	}
 
 	void flush(SingleFrameSp next_frame)
 	{
@@ -30,10 +33,9 @@ public:
 		}
 	}
 
-	Policy last_p;
-
-	std::string q_values_str;
-	std::string detail() const { return last_p.to_string(); }
+	Policy last_p, last_non_random_p;
+	
+	std::string detail() const { return str(format("%s%s")%last_non_random_p.to_string()%(last_p.is_random()? str(format(" *RAND* %d")%last_p.action):"")); }
 
 	int forward(SingleFrameSp frame,std::function<int()> random_action,std::function<bool(int)> is_valid_action)
 	{
@@ -47,6 +49,10 @@ public:
 			std::copy(frame_window.begin(), frame_window.end(), current_experience.input_frames.begin());
 			auto p = network->predict(current_experience.input_frames,random_action,is_valid_action);
 			last_p = p;
+			if (!p.is_random())
+			{
+				last_non_random_p = p;
+			}
 			current_experience.action = p.action;
 
 			frame_window.pop_front();

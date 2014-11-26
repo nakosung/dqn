@@ -52,6 +52,18 @@ int kbhit(void)
 	return 0;
 }
 
+bool is_keypressed(char c)
+{
+	if (kbhit())
+	{
+		auto ch = getchar();
+		if (ch == c)
+			return true;
+		ungetc(ch,stdin);
+	}
+	return false;
+}
+
 int main(int argc, char** argv) 
 {
 	std::mt19937 random_engine;
@@ -87,7 +99,7 @@ int main(int argc, char** argv)
 	}
 	else
 	{
-		dqn_trained = dqn;
+		// dqn_trained = dqn;
 	}
 
 	std::vector<boost::shared_ptr<DeepNetwork>> nets;
@@ -101,6 +113,8 @@ int main(int argc, char** argv)
 	{
 		nets.push_back(dqn);		
 	}		
+
+	nets.push_back(dqn_trained);		
 
 	auto train_nets = [&]{
 		for (auto n : nets)
@@ -134,20 +148,25 @@ int main(int argc, char** argv)
 		auto x_dist = std::uniform_int_distribution<>(0,w.size.x-1);
 
 		auto hero = [&](int team){return static_cast<Agent*>(new Hero(team));};
+		auto hero2 = [&](int team){return static_cast<Agent*>(new Hero2(team));};
 		auto minion = [&](int team){return static_cast<Agent*>(new Minion(team));};
+		auto minion2 = [&](int team){return static_cast<Agent*>(new Minion2(team));};
 
 		auto spawn = [&](int team,std::function<Agent*(int team)> gen){
 			auto pawn = w.spawn([&]{return gen(team);});
 			static_cast<Pawn*>(pawn)->brain.reset(new HeroBrain(team == training_team ? dqn : dqn_trained,&w));
-			pawn->pos = pos_gen([&]{return Vector(x_dist(random_engine),team * (w.size.y - 1));});				
+			pawn->pos = pos_gen([&]{return Vector(x_dist(random_engine),team + w.size.y / 2);});				
 		};			
 
 		spawn(0,minion);
 		spawn(0,minion);
-		spawn(1,minion);
-		spawn(1,minion);
+		spawn(0,minion);
+		spawn(1,minion2);
+		spawn(1,minion2);
 		spawn(0,hero);
 		spawn(1,hero);		
+
+		// should_swap = true;
 
 		while (!w.quit && !quit)
 		{

@@ -1,5 +1,7 @@
 auto ANSI = "\033[";
 
+const float radius = 0.0125;
+
 struct GameState
 {
 	std::array<int,2> scores;
@@ -67,6 +69,11 @@ Vector operator + (const Vector& a, const Vector& b)
 	return Vector(a.x + b.x, a.y + b.y);
 }
 
+Vector operator - (const Vector& a, const Vector& b)
+{
+	return Vector(a.x - b.x, a.y - b.y);
+}
+
 bool operator != (const Vector& a, const Vector& b)
 {
 	return a.x != b.x || a.y != b.y;
@@ -79,6 +86,7 @@ bool operator == (const Vector& a, const Vector& b)
 
 class World;
 class Actable;
+class Event;
 
 class Agent {
 public:	
@@ -91,12 +99,14 @@ public:
 	{}
 
 	virtual bool is_friendly(int team) const { return false; }
+	virtual bool ping_team(int team) const { return false; }
 
 	virtual void check_sanity() const
 	{
 		assert(world);
 	}
 
+	virtual void take_event(const Event& e) {}
 	virtual void game_over(int winner) {}
 
 	virtual void forward() {}
@@ -116,14 +126,23 @@ struct Event
 		event_attack,
 		event_takedamage,
 		event_die,
-		event_heal
+		event_heal,
+		event_trap_0,
+		event_trap_1,
+		event_hellpot,
+		event_honeypot
 	};
 	
 	EventType type;
 	Vector location;
+	int lifespan;	
+	float radius;
+	Agent* instigator;
 
 	Event() {}
-	Event(EventType type, const Vector& location) : type(type), location(location)
+	Event(EventType type, const Vector& location, int lifespan = 1, float radius = ::radius) : type(type), location(location), lifespan(lifespan), radius(radius)
+	{}
+	Event(EventType type, const Vector& location, int lifespan, float radius, Agent* instigator) : type(type), location(location), lifespan(lifespan), radius(radius), instigator(instigator)
 	{}
 	std::string one_letter() const 
 	{ 
@@ -133,6 +152,10 @@ struct Event
 			case event_takedamage : return "D";
 			case event_die : return "X";
 			case event_heal : return "+";
+			case event_trap_0 : return "0";
+			case event_trap_1 : return "1";
+			case event_hellpot : return "_";
+			case event_honeypot : return "#";
 			default : return "?";
 		}
 	}
@@ -152,6 +175,7 @@ public:
 
 	Vector size;
 	std::list< shared_ptr<Agent> > agents;	
+	std::list< shared_ptr<Agent> > killed_agents;
 	GameState& game_state;	
 	bool quit;	
 	int final_winner;
@@ -163,6 +187,9 @@ public:
 	: random_engine(random_engine), size(world_size,world_size), game_state(game_state), quit(false), final_winner(-1), world_clock(0)
 	{		
 		geom = std::uniform_int_distribution<>(0,1)(random_engine);		
+
+		add_event({Event::event_hellpot,random_location(),100000,world_size / 8});		
+		add_event({Event::event_honeypot,random_location(),100000,world_size / 8});		
 	}
 
 	void add_event(const Event& event)
@@ -187,6 +214,19 @@ public:
 			}
 		}
 		quit = true;
+	}
+
+	bool is_team_alive( int team ) const
+	{
+		for (auto a : agents)
+		{
+			if (a->ping_team(team))
+			{
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	Agent* spawn(std::function<Agent*(void)> l)
@@ -226,9 +266,32 @@ public:
 		}
 	}
 
+	Vector random_location() const
+	{
+		std::uniform_real_distribution<> dist(0,world_size);		
+		return Vector(dist(random_engine),dist(random_engine));
+	}
+
+	template <typename T>
+	void paint(const Vector& center, float radius, int N, T t)
+	{
+		Vector extent(radius, radius);
+		float tick = radius * 2 / N;		
+		for (int y=0; y<N; ++y)
+		{
+			Vector p = center - extent;	
+			for (int x=0; x<N; ++x)
+			{
+				p.x += tick;				
+			}
+		}		
+	}
+
 	void tick() 
 	{
-		events.clear();
+		events.erase(
+			std::remove_if(events.begin(),events.end(),[=](Event& e){return --e.lifespan <= 0;}),
+			events.end());
 
 		game_state.clock++;
 		if (world_clock++ > 1000)
@@ -240,6 +303,17 @@ public:
 		{
 			a->forward();
 		}
+
+		for (const auto& e : events)
+		{
+			for (auto a : agents)
+			{
+				if (distance_squared(a->pos, e.location) <= square(radius+e.radius))
+				{
+					a->take_event(e);
+				}
+			}
+		}		
 
 		for (auto a : agents)
 		{
@@ -257,16 +331,35 @@ public:
 
 	void collect_garbage()
 	{
-		for (auto itr = agents.begin(); itr != agents.end();)
-		{
-			auto agent = *itr;
-			if (agent->pending_kill)
+		bool killed_any_body = false;
+		agents.remove_if([&](shared_ptr<Agent> a){
+			if (a->pending_kill)
 			{
-				agents.erase(itr++);
+				killed_any_body = true;
+				killed_agents.push_back(a);
+				return true;
 			}
 			else
 			{
-				++itr;
+				return false;
+			}
+		});		
+
+		if (killed_any_body)
+		{
+			bool team0 = is_team_alive(0);
+			bool team1 = is_team_alive(1);
+			if (!team0 && team1)
+			{
+				game_over(1);
+			}
+			else if (team0 && !team1)
+			{
+				game_over(0);
+			}
+			else if (!team0 && !team1)
+			{
+				game_over(-1);
 			}
 		}
 	}	
@@ -274,10 +367,10 @@ public:
 	bool is_vacant(const Vector& x,const Agent* self = nullptr) const
 	{
 		if (is_solid(x)) return false;
-
+	
 		for (auto a : agents)
 		{
-			if (a.get() != self && distance_squared(a->pos,x) <= 1)
+			if (a.get() != self && distance_squared(a->pos,x) <= square(radius*2))
 			{
 				return false;
 			}
@@ -287,7 +380,7 @@ public:
 
 	bool can_move_to(const Agent* a,const Vector& start, const Vector& end) const
 	{
-		return (is_vacant(end,a) && end.x >= 0 && end.y >= 0 && end.x < size.x && end.y < size.y);		
+		return is_vacant(end,a);		
 	}
 
 	bool is_solid(const Vector& v) const
@@ -317,7 +410,7 @@ public:
 	typedef Agent Base;
 
 	float reward, acc_reward;
-	boost::shared_ptr<AgentBrain> brain;
+	std::shared_ptr<AgentBrain> brain;
 
 	Actable() : num_actions(1), reward(0), brain(nullptr), acc_reward(0) {}
 
@@ -336,6 +429,9 @@ public:
 			{
 				action = brain->forward(this);
 				if (is_valid_action(action)) break;
+				
+				action = 0;
+				break;
 			}
 		}
 		else
@@ -409,8 +505,8 @@ public:
 		move_max
 	};
 
-	Movable()
-	: speed(0.125f)
+	Movable(float speed)
+	: speed(speed)
 	{
 		move_action_offset = num_actions;
 		num_actions += move_max;
@@ -463,6 +559,7 @@ public:
 	Display(World& world) 
 	: world(world), needs_clear(true)
 	{
+		std::cout << ANSI << "2J" << std::flush;
 	}	
 
 	void tick()
@@ -489,14 +586,14 @@ public:
 			std::cout << ANSI << "1J";
 		}		
 
-		int zoom = 2;
+		int zoom = 4;
 
 		std::list<Agent*> dirties;
 		std::vector<std::string> newlines;
 		int y = 0;
 		auto logline = [&](std::string x) { newlines.push_back(x); };
 		logline(str(format("agents %3d clock %8d epoch %8d")%world.agents.size()%world.game_state.clock%world.game_state.epoch));
-		logline(str(format("%s(%d) : %s(%d)")%world.game_state.names[0]%world.game_state.scores[0]%world.game_state.names[1]%world.game_state.scores[1]));
+		logline(str(format("%s(%d) : %s(%d)")%world.game_state.names[0]%world.game_state.scores[0]%world.game_state.names[1]%world.game_state.scores[1]));		
 
 		// I know, it's too slow.. :)
 		std::string reset(str(format("%s40m")%ANSI));
@@ -515,9 +612,23 @@ public:
 				}
 				for (bool found = false;;)
 				{
+					for (auto a : world.agents)
+					{
+						float r2 = 1.0f/zoom + radius;
+						if (distance_squared(p, a->pos) < r2*r2)
+						{			
+							found = true;			
+							line += a->one_letter();
+							break;
+						}								
+					}
+
+					if (found) break;
+					
 					for (const auto& a : world.events)
 					{
-						if (distance_squared(p, a.location) < 0.25)
+						float r2 = 1.0f/zoom + a.radius;
+						if (distance_squared(p, a.location) < r2*r2)
 						{			
 							found = true;			
 							line += a.one_letter();
@@ -527,17 +638,6 @@ public:
 
 					if (found) break;
 
-					for (auto a : world.agents)
-					{
-						if (distance_squared(p, a->pos) < 0.25)
-						{			
-							found = true;			
-							line += a->one_letter();
-							break;
-						}								
-					}
-
-					if (found) break;
 
 					line += " ";	
 
@@ -570,7 +670,8 @@ public:
 enum PawnType
 {
 	PT_minion,
-	PT_range,
+	PT_minion2,
+	PT_hero2,
 	PT_hero,
 	PT_max
 };
@@ -579,14 +680,16 @@ enum SkillEffect
 {
 	SE_nothing,
 	SE_heal,
-	SE_deal
+	SE_deal,
+	SE_trap
 };
 
 struct SkillParams
 {
 	SkillEffect type;
 	int cooldown;
-	int range;
+	float range;
+	int level;
 };
 
 class Pawn : public Movable
@@ -595,19 +698,38 @@ public :
 	typedef Movable Base;
 
 	// schema
-	int max_health;
+	float max_health;
 
 	int team;
-	int health;	
+	float health;	
 	int death_timer;
 	char code;
 	PawnType type;
-	int range;
-
+	
 	std::array<SkillParams,max_skills> skill_params;
 	std::array<int,max_skills> cooldown;
 
 	float attack_reward, kill_reward;
+
+	virtual void take_event(const Event& e)
+	{
+		switch(e.type)
+		{
+		case Event::event_trap_0:
+		case Event::event_trap_1:			
+			if (team == e.type - Event::event_trap_0)
+			{
+				take_damage(0.1f,dynamic_cast<Pawn*>(e.instigator));
+			}
+			break;
+		case Event::event_hellpot:
+			take_damage(0.1f,nullptr);
+			break;
+		case Event::event_honeypot:			
+			heal(0.1f,nullptr);
+			break;
+		}
+	}
 
 	std::string colorize(std::string in) const { return str(format("%s%dm%s%s0m")%ANSI%(team+44)%in%ANSI); }
 
@@ -616,8 +738,8 @@ public :
 	virtual std::string one_letter() { return colorize(str(format("%c")%code)); }
 	virtual std::string detail() { return colorize(str(format("%c[%d] hp:%d %s")%code%team%health%Base::detail())); }
 
-	Pawn(PawnType type, int team,const std::array<SkillParams,max_skills>& skill_params,int in_max_health, char code, float attack_reward, float kill_reward)
-	: type(type), max_health(in_max_health), skill_params(skill_params), team(team), health(in_max_health), code(code), death_timer(0), attack_reward(attack_reward), kill_reward(kill_reward)
+	Pawn(PawnType type, int team,float speed, const std::array<SkillParams,max_skills>& skill_params,float in_max_health, char code, float attack_reward, float kill_reward)
+	: Base(speed), type(type), max_health(in_max_health), skill_params(skill_params), team(team), health(in_max_health), code(code), death_timer(0), attack_reward(attack_reward), kill_reward(kill_reward)
 	{
 		std::fill(cooldown.begin(),cooldown.end(),0);
 		num_actions += max_skills;
@@ -655,23 +777,30 @@ public :
 			{
 				case SE_deal : return b->team != team;
 				case SE_heal : return b->team == team && b->health < b->max_health;
+				case SE_trap : return b->team != team;
 				default : return false;
 			}			
 		}
 		return false;
 	}
 
-	virtual void do_affect(SkillEffect type,Pawn* b)
+	virtual void do_affect(const SkillParams& param,Pawn* b)
 	{	
-		if (can_affect(type,b))
+		if (can_affect(param.type,b))
 		{
-			switch (type)
+			switch (param.type)
 			{
 				case SE_deal: 
-					b->take_damage(1,this);
+					b->take_damage(0.25f * param.level,this);
 					break;
 				case SE_heal:
-					b->heal(1,this);
+					b->heal(1 * param.level,this);
+					break;
+				case SE_trap:
+					{
+						Event e{b->team == 0 ? Event::event_trap_0 : Event::event_trap_1, b->pos, 50, 2.0f, this};	
+						world->add_event(e);
+					}
 					break;
 			}
 		}
@@ -681,7 +810,7 @@ public :
 	virtual Pawn* find_target(int slot) const
 	{
 		const auto& param = skill_params[slot];
-		int best_dist = square(param.range+1);
+		float best_dist = square(param.range+1);
 		Pawn* best = nullptr;
 		for (auto a:world->agents)
 		{
@@ -707,22 +836,23 @@ public :
 			attacker->death_timer = 0;
 			attacker->reward += kill_reward;
 		}		
+		else
+		{
+			reward -= kill_reward;
+		}
 
-		pending_kill = true;
-
-		// reward -= 10.0f;
+		pending_kill = true;		
 	}
 
-	virtual void take_damage(int damage, Pawn* attacker)
+	virtual void take_damage(float damage, Pawn* attacker)
 	{	
 		health -= damage;
 		if (attacker && !attacker->pending_kill)
 		{
-			attacker->reward += attack_reward;
+			attacker->reward += attack_reward * damage;
 			world->add_event(Event(Event::event_attack,attacker->pos));	
-		}
-
-		world->add_event(Event(Event::event_takedamage,pos));
+			world->add_event(Event(Event::event_takedamage,pos));
+		}	
 
 		// reward -= 1.0f;
 
@@ -734,13 +864,16 @@ public :
 		}
 	}
 
-	virtual void heal(int amount, Pawn* healer)
+	virtual void heal(float amount, Pawn* healer)
 	{	
+		amount = std::min(amount,max_health - health);
+
 		health += amount;
 
-		if (health > max_health)
+		reward += amount * 0.01f;		
+		if (healer)
 		{
-			health = max_health;
+			healer->reward += amount * 0.1f;
 		}
 	}
 
@@ -753,7 +886,7 @@ public :
 			auto pawn = dynamic_cast<Pawn*>(agent.get());
 			if (pawn && pawn != this)
 			{
-				r += exp( -distance_squared(pos,pawn->pos) / square(range) );
+				r += exp( -distance_squared(pos,pawn->pos) / square(1) );
 			}
 		}
 		return r;
@@ -768,6 +901,8 @@ public :
 	virtual void tick()
 	{
 		Base::tick();
+
+		// take_damage(0.001,nullptr);
 
 		death_timer++;
 		if (death_timer == 100)
@@ -806,7 +941,7 @@ public :
 			auto target = find_target(action);			
 			if (target) 
 			{
-				do_affect(param.type,target);
+				do_affect(param,target);
 			}
 		}
 		else
@@ -819,19 +954,27 @@ public :
 class Minion : public Pawn
 {
 public :
-	Minion(int team) : Pawn(PT_minion,team,{{SE_deal,3,1,SE_heal,5,1}},2,'m',0.1f,0.5f) {}
+	Minion(int team) : Pawn(PT_minion,team,0.3,{{SE_deal,1,0.25,1,SE_nothing,0,0,0}},2,'z',1,1) {}
+};
+
+class Minion2 : public Pawn
+{
+public :
+	Minion2(int team) : Pawn(PT_minion2,team,0.2,{{SE_deal,3,0.5,2,SE_nothing,0,0,0}},2,'d',1,1) {}
 };
 
 class Hero : public Pawn
 {
 public :
-	Hero(int team) : Pawn(PT_hero, team, {{SE_deal,15,3,SE_nothing,0,0}},3,'H',0.2f,1.0f) {}
-	virtual void die(Pawn* attacker)
-	{
-		world->game_over(attacker ? attacker->team : -1);
+	Hero(int team) : Pawn(PT_hero, team,0.125, {{SE_deal,5,1,3,SE_nothing,50,1.0,1}},3,'H',2,2) {}	
+	virtual bool ping_team(int team) const { return is_friendly(team); }
+};
 
-		brain->flush(SingleFrameSp());
-	}
+class Hero2 : public Pawn
+{
+public :
+	Hero2(int team) : Pawn(PT_hero2, team, 0.125, {{SE_deal,5,1,3,SE_heal,4,5,1}},3,'H',2,2) {}	
+	virtual bool ping_team(int team) const { return is_friendly(team); }
 };
 
 class HeroBrain : public AgentBrain
@@ -852,6 +995,9 @@ public:
 	{		
 		SingleFrameSp single_frame(new SingleFrame);
 
+		const Vector center(sight_diameter/2.0f,sight_diameter/2.0f);
+		const float grid = 1.0f;
+
 		auto& images = single_frame->images;
 
 		for (auto& image : images)
@@ -862,20 +1008,27 @@ public:
 		Pawn* self = dynamic_cast<Pawn*>(agent);
 
 		auto write_i = [&](int ch, int x, int y, float val)
-		{
-			Vector v(x - self->pos.x + sight_diameter/2,y - self->pos.y + sight_diameter/2);
-			if (v.x >= 0 && v.y >= 0 && v.x < sight_diameter && v.y < sight_diameter)
+		{			
+			if (x >= 0 && y >= 0 && x < sight_diameter && y < sight_diameter)
 			{
-				images[ch][v.x + v.y * world_size] += val;
+				images[ch][x + y * sight_diameter] += val;
 			}
 		};
 
-		auto write = [&](int ch, const Vector& p, float val)
+		// std::cout << self->pos.x << ", " << self->pos.y << "\n";
+
+		auto write = [&](int ch, const Vector& q, float val)
 		{
+			Vector p = (q - self->pos) + center;
 			auto ix = int(std::floor(p.x));
 			auto iy = int(std::floor(p.y));
 			auto fx = p.x - ix;
 			auto fy = p.y - iy;			
+
+			if (fx > 0.5) ix++;
+			if (fy > 0.5) iy++;
+			write_i(ch,ix,iy,val);
+			return;
 
 			write_i(ch,ix,iy,val * (1-fx) * (1-fy));
 			write_i(ch,ix+1,iy,val * fx * (1-fy));
@@ -883,17 +1036,35 @@ public:
 			write_i(ch,ix,iy+1,val * (1-fx) * fy);
 		};
 
-		for (int y=0; y<world_size; ++y)
+		for (int y=0; y<sight_diameter; ++y)
 		{
-			for (int x=0; x<world_size; ++x)
+			for (int x=0; x<sight_diameter; ++x)
 			{
-				if (agent->world->is_solid(Vector(x,y)))
+				Vector p = Vector(x,y) + self->pos - center;
+				if (agent->world->is_solid(p))
 				{
-					write_i(0,x,y,-2);
+					write(0,p,-2);
 				}				
 				else
 				{
-					write_i(0,x,y,-1);
+					write(0,p,0);
+				}
+
+				for (const auto& e : agent->world->events)
+				{
+					if (distance_squared(e.location,p) <= square(grid + e.radius))
+					{
+						write(3,p,e.type + 1);
+					}					
+				}
+
+				for (auto other : agent->world->agents)
+				{
+					Pawn* a = dynamic_cast<Pawn*>(other.get());
+					if (a == nullptr) continue;
+					
+					const float power = a->skill_params[0].level * exp( -distance_squared(p,a->pos) / square(a->skill_params[0].range) );
+					write(2,p,(a->team == self->team ? 1 : -1) * power ); 
 				}
 			}
 		}
@@ -903,27 +1074,44 @@ public:
 			Pawn* a = dynamic_cast<Pawn*>(other.get());
 			if (a == nullptr) continue;
 
-			write(0,a->pos,a->type);
-			write(1,a->pos,(float)a->health / a->max_health);
-			write(2,a->pos,(a->team == self->team) ? 1 : -1);
+			write(0,a->pos,a->type+1);
+			write(1,a->pos,a->health / a->max_health);			
+			write(4,a->pos,(a->team == self->team ? 1 : -1) ); 
 			for (int i=0; i<max_skills; ++i)
 			{
-				write(4+i,a->pos,a->skill_pct(i));
+				write(5+i,a->pos,a->skill_pct(i));
 			}
-		}
+		}		
 
-		for (const auto& e : agent->world->events)
+		extern bool is_keypressed(char c);
+		if (is_keypressed('d'))
 		{
-			write(3,e.location,e.type + 1);
+			for (auto& image : images)
+			{
+				for (int y=0; y<sight_diameter; ++y)
+				{
+					for (int x=0; x<sight_diameter; ++x)
+					{
+						std::cout << image[x + y * sight_diameter] << " ";
+					}
+					std::cout << "\n";
+				}
+				std::cout << "\n\n\n";
+			}
+			getchar();			
 		}
+		// static int counter = 0;
+		// if (counter++ > 10)
+		// 	exit(-1);
 
 		auto& stats = single_frame->stats;
 		stats[0] = world->game_state.clock / 1000.0f;
-		stats[1] = (float)self->health / self->max_health;		
+		stats[1] = self->health / self->max_health;		
 		stats[2] = self->type;
+		stats[3] = world->get_dominant_team() == self->team ? 1 : 0;
 		for (int i=0; i<max_skills; ++i)
 		{
-			stats[3+i] = self->skill_pct(i);
+			stats[4+i] = self->skill_pct(i);
 		}		
 		return single_frame;
 	}
