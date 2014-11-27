@@ -8,7 +8,7 @@
 #include <unordered_map>
 
 DEFINE_int32(experience_size, 10, "experience_size percent");
-DEFINE_int32(learning_steps_total, 200000, "learning_steps_total");
+DEFINE_int32(learning_steps_total, 1000000, "learning_steps_total");
 DEFINE_int32(learning_steps_burnin, -1, "learning_steps_burnin");
 DEFINE_int32(epsilon_min, 0.1, "epsilon_min");
 DEFINE_int32(epsilon_test, 0.05, "epsilon_test");
@@ -60,6 +60,11 @@ struct Policy
 	bool is_random() const
 	{
 		return val == FLT_MIN;
+	}
+
+	bool is_valid() const
+	{
+		return is_valid_action(action);
 	}
 };
 
@@ -142,6 +147,8 @@ public :
 		void push(const Experience& e)
 		{
 			Experience* out;
+
+			e.check_sanity();
 
 			// being slow for limited time frames
 			if (experiences.size() < size)
@@ -581,7 +588,15 @@ public :
 		}
 		else
 		{
-			return eval_for_prediction.evaluate(std::array<InputFrames,1>{{input_frames}},is_valid_action).front();
+			Policy p = eval_for_prediction.evaluate(std::array<InputFrames,1>{{input_frames}},is_valid_action).front();
+			if (p.is_valid())
+			{
+				return p;
+			}
+			else
+			{
+				return Policy(random_action());
+			}
 		}
 	}		
 

@@ -158,11 +158,11 @@ int main(int argc, char** argv)
 			pawn->pos = pos_gen([&]{return Vector(x_dist(random_engine),team + w.size.y / 2);});				
 		};			
 
-		spawn(0,minion);
-		spawn(0,minion);
-		spawn(0,minion);
-		spawn(1,minion2);
-		spawn(1,minion2);
+		// spawn(0,minion);
+		// spawn(0,minion);
+		// spawn(0,minion);
+		// spawn(1,minion2);
+		// spawn(1,minion2);
 		spawn(0,hero);
 		spawn(1,hero);		
 

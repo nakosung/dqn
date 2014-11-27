@@ -465,6 +465,7 @@ public:
 		if (brain)
 		{
 			reward *= 0.1f;			
+
 			brain->backward(std::min(1.0f,std::max(-1.0f,reward)));
 
 			acc_reward = acc_reward * brain->network->trainer.gamma + reward;
@@ -723,7 +724,7 @@ public :
 			}
 			break;
 		case Event::event_hellpot:
-			take_damage(0.1f,nullptr);
+			take_damage(1,nullptr);
 			break;
 		case Event::event_honeypot:			
 			heal(0.1f,nullptr);
@@ -849,7 +850,7 @@ public :
 		health -= damage;
 		if (attacker && !attacker->pending_kill)
 		{
-			attacker->reward += attack_reward * damage;
+			//attacker->reward += attack_reward * damage;
 			world->add_event(Event(Event::event_attack,attacker->pos));	
 			world->add_event(Event(Event::event_takedamage,pos));
 		}	
@@ -966,14 +967,14 @@ public :
 class Hero : public Pawn
 {
 public :
-	Hero(int team) : Pawn(PT_hero, team,0.125, {{SE_deal,5,1,3,SE_nothing,50,1.0,1}},3,'H',2,2) {}	
+	Hero(int team) : Pawn(PT_hero, team,0.5, {{SE_deal,5,1,3,SE_nothing,50,1.0,1}},3,'H',2,2) {}	
 	virtual bool ping_team(int team) const { return is_friendly(team); }
 };
 
 class Hero2 : public Pawn
 {
 public :
-	Hero2(int team) : Pawn(PT_hero2, team, 0.125, {{SE_deal,5,1,3,SE_heal,4,5,1}},3,'H',2,2) {}	
+	Hero2(int team) : Pawn(PT_hero2, team, 0.5, {{SE_deal,5,1,3,SE_heal,4,5,1}},3,'H',2,2) {}	
 	virtual bool ping_team(int team) const { return is_friendly(team); }
 };
 
@@ -1061,7 +1062,7 @@ public:
 				for (auto other : agent->world->agents)
 				{
 					Pawn* a = dynamic_cast<Pawn*>(other.get());
-					if (a == nullptr) continue;
+					if (a == nullptr || a == self) continue;
 					
 					const float power = a->skill_params[0].level * exp( -distance_squared(p,a->pos) / square(a->skill_params[0].range) );
 					write(2,p,(a->team == self->team ? 1 : -1) * power ); 
@@ -1072,10 +1073,10 @@ public:
 		for (auto other : agent->world->agents)
 		{
 			Pawn* a = dynamic_cast<Pawn*>(other.get());
-			if (a == nullptr) continue;
+			if (a == nullptr || a == self) continue;
 
 			write(0,a->pos,a->type+1);
-			write(1,a->pos,a->health / a->max_health);			
+			write(1,a->pos,a->health);			
 			write(4,a->pos,(a->team == self->team ? 1 : -1) ); 
 			for (int i=0; i<max_skills; ++i)
 			{
@@ -1106,7 +1107,7 @@ public:
 
 		auto& stats = single_frame->stats;
 		stats[0] = world->game_state.clock / 1000.0f;
-		stats[1] = self->health / self->max_health;		
+		stats[1] = self->health;
 		stats[2] = self->type;
 		stats[3] = world->get_dominant_team() == self->team ? 1 : 0;
 		for (int i=0; i<max_skills; ++i)
