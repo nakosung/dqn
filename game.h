@@ -854,6 +854,10 @@ public :
 			world->add_event(Event(Event::event_attack,attacker->pos));	
 			world->add_event(Event(Event::event_takedamage,pos));
 		}	
+		else
+		{
+			reward -= 1;
+		}
 
 		// reward -= 1.0f;
 

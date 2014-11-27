@@ -1,7 +1,7 @@
 // fix
 enum { temporal_window = 3 };	
-enum { sight_diameter = 16 };
-enum { world_size = sight_diameter / 2 };
+enum { sight_diameter = 8 };
+enum { world_size = sight_diameter };
 enum { sight_area = sight_diameter * sight_diameter };
 enum { max_skills = 2 };
 enum { num_move_dirs = 4 };
